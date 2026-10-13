@@ -39,8 +39,27 @@ public class ChatInjector {
     private static final Logger LOGGER = LogManager.getLogger("GuguChat");
     private static volatile MinecraftServer server;
 
+    /** 运行统计（/guguchat status 展示用） */
+    public static final class Stats {
+        public volatile long totalMessages = 0;
+        public volatile long totalDelivered = 0;
+        public volatile String lastMessage = null;
+        public volatile long lastAtMs = 0;
+    }
+
+    private static final Stats STATS = new Stats();
+
     static void setServer(MinecraftServer s) {
         server = s;
+    }
+
+    /** 供 status 命令读取服务器实例 */
+    public static MinecraftServer getServer() {
+        return server;
+    }
+
+    public static Stats getStats() {
+        return STATS;
     }
 
     /** 注入一条原生聊天消息，返回送达玩家数 */
@@ -87,6 +106,12 @@ public class ChatInjector {
             p.connection.send(packet);
             delivered++;
         }
+
+        // 统计（/guguchat status 展示）
+        STATS.totalMessages += 1;
+        STATS.totalDelivered += delivered;
+        STATS.lastMessage = "<" + displayName + "> " + (message.length() > 50 ? message.substring(0, 50) + "…" : message);
+        STATS.lastAtMs = System.currentTimeMillis();
 
         // 同时在服务端日志里打一份（MCDR 能看到，供其他插件/日志分析）
         LOGGER.info("[GuguChat] <{}> {}", displayName, message);

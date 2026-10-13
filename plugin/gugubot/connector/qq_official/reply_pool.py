@@ -93,6 +93,32 @@ class QQReplyPool:
         with self._lock:
             self._pools.clear()
 
+    def cleanup(self) -> int:
+        """主动清理全部过期/用尽的 msg_id（心跳线程定期调用）。
+
+        Returns
+        -------
+        int
+            清理掉的条目数。
+        """
+        now = time.time()
+        removed = 0
+        with self._lock:
+            for group_openid in list(self._pools.keys()):
+                pool = self._pools[group_openid]
+                stale = [
+                    mid
+                    for mid, info in pool.items()
+                    if now - info["ts"] > _MSG_TTL or info["seq"] >= _MAX_SEQ
+                ]
+                for mid in stale:
+                    del pool[mid]
+                removed += len(stale)
+                # 空池子整个移除，防小对象累积
+                if not pool:
+                    del self._pools[group_openid]
+        return removed
+
     def size(self, group_openid: str) -> int:
         with self._lock:
             pool = self._pools.get(group_openid)

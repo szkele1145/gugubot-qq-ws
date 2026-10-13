@@ -155,6 +155,12 @@ class QQOfficialParser(BasicParser):
         # 富媒体附件 → image/record/video 段
         segments = self._build_segments(content, data.get("attachments"))
 
+        # mentions（@了谁）→ at 段；openid 转虚拟号保证下游绑定名渲染一致
+        for seg in self._mentions_to_segments(data.get("mentions")):
+            openid = seg["data"]["qq"]
+            seg["data"]["qq"] = id_mapper.to_legacy_user(openid) if openid else seg["data"]["name"]
+            segments.append(seg)
+
         # 显示名：官方下发真实昵称 username（新平台能力）；没有则回退虚拟号
         username = (author.get("username", "") or "").strip()
         sender_name = username or f"成员{legacy_user[-4:]}"
@@ -361,6 +367,26 @@ class QQOfficialParser(BasicParser):
         if not segments:
             segments.append({"type": "text", "data": {"text": ""}})
         return segments
+
+    @staticmethod
+    def _mentions_to_segments(mentions: Optional[list]) -> list:
+        """官方 mentions（@用户列表，含 username/member_openid）→ at 段。
+
+        生成 [{"type":"at","data":{"qq":虚拟号,"name":昵称}}]；下游
+        mc_builder 的 at 处理会用绑定名渲染 @xxx。
+        """
+        result = []
+        for m in mentions or []:
+            if not isinstance(m, dict):
+                continue
+            openid = m.get("id", "") or m.get("member_openid", "") or ""
+            name = (m.get("username", "") or "").strip()
+            if openid or name:
+                result.append({
+                    "type": "at",
+                    "data": {"qq": openid or name, "name": name},
+                })
+        return result
 
     def _cache_attachment(self, url: str, filename: str, content_type: str) -> Optional[str]:
         """下载附件到插件数据目录，返回本地绝对路径（失败返回 None）。"""

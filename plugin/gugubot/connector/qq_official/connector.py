@@ -377,6 +377,7 @@ class QQOfficialConnector(BasicConnector):
             logger=self.logger,
             on_ready=on_ready,
             on_dispatch=self._on_ws_dispatch,
+            reply_pool=self.reply_pool,
         )
         self.ws_client.connect()
 
@@ -402,10 +403,10 @@ class QQOfficialConnector(BasicConnector):
         """WS Dispatch 事件 → 丢给 parser（MCDR 事件循环）。"""
         if not self.enable:
             return
-        # 事件到达的可见日志（排查"群里没反应"的关键观测点）
+        # 事件到达日志（debug 级：高频，避免 info 刷屏；排查时开 debug）
         if self.logger:
             show_msg = str(data.get("content", ""))[:40] if isinstance(data, dict) else ""
-            self.logger.info(
+            self.logger.debug(
                 f"{self.log_prefix} 收到官方事件 {event_type} (seq={seq}){('：' + show_msg) if show_msg else ''}"
             )
         try:
@@ -522,8 +523,17 @@ class QQOfficialConnector(BasicConnector):
                     if self._is_rate_limited(e):
                         break
 
+                # 分片间节流（可配置：send_throttle_min/max 秒，默认 0.5~1.5）
                 if len(message_parts) > 1:
-                    await asyncio.sleep(random.uniform(0.5, 1.5))
+                    t_min = self.config.get_keys(
+                        ["connector", "QQ", "connection", "official", "send_throttle_min"], 0.5
+                    )
+                    t_max = self.config.get_keys(
+                        ["connector", "QQ", "connection", "official", "send_throttle_max"], 1.5
+                    )
+                    if t_max < t_min:
+                        t_min, t_max = t_max, t_min
+                    await asyncio.sleep(random.uniform(float(t_min), float(t_max)))
 
     # ------------------------------------------------------------------ #
     # 内部发送

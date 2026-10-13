@@ -29,6 +29,9 @@ connector:
       official: # QQ官方开放平台 :: (type=official 时生效) 在 https://q.qq.com 创建机器人后获取
         appid: "" # 机器人 AppID
         secret: "" # 机器人密钥（AppSecret）
+        send_throttle_min: 0.5 # 分片消息最小间隔（秒）:: 长消息分片发送时的节流下限
+        send_throttle_max: 1.5 # 分片消息最大间隔（秒）:: 节流上限
+        cache_attachments: true # 附件本地缓存 :: 收到的图片等立即下载到数据目录（官方CDN链接30分钟过期）
         intents: # 事件订阅（群聊与单聊同属 GROUP_AND_C2C_EVENT 位；对应开放平台"QQ群"能力）
           group_at_messages: true # 群消息 :: @机器人消息 + 全量群消息（后者需在平台开启"接收所有消息"）
           c2c_messages: false # 单聊消息 :: 需开通"QQ单聊"能力才可开启

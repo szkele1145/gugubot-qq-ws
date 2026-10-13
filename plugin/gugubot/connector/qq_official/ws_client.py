@@ -82,6 +82,7 @@ class QQOfficialWSClient:
         logger=None,
         on_dispatch: Optional[Callable[[str, int, dict], None]] = None,
         on_ready: Optional[Callable[[dict], None]] = None,
+        reply_pool=None,
     ) -> None:
         self._api = api_client
         self._token_manager = token_manager
@@ -89,6 +90,7 @@ class QQOfficialWSClient:
         self._logger = logger
         self._on_dispatch = on_dispatch
         self._on_ready = on_ready
+        self._pool = reply_pool  # 回复池引用（心跳时顺带清理）
 
         self.ws: Optional[websocket.WebSocketApp] = None
         self._ws_thread: Optional[threading.Thread] = None
@@ -101,9 +103,10 @@ class QQOfficialWSClient:
         self.last_seq: Optional[int] = None
         self._heartbeat_interval: float = 30.0
         self._ready = False
-        # 心跳线程控制
+        # 心跳线程控制（代数 token 防竞态）
         self._hb_stop = threading.Event()
         self._hb_ack_miss = 0
+        self._hb_generation = 0
         # 最近一次关闭码（4014 等鉴权类错误用长退避）
         self._last_close_code: Optional[int] = None
 
@@ -340,26 +343,32 @@ class QQOfficialWSClient:
         self._send_json(payload)
 
     def _start_heartbeat(self) -> None:
-        """（重）启动心跳线程。
+        """（重）启动心跳线程（代数 token 版，无竞态）。
 
-        每次收到 Hello 都调用：先停掉旧线程（连接已更换，旧心跳作废），
-        再起新线程。心跳连续 ``_HB_MAX_MISS`` 次未收到 ACK 主动断开，
-        由 run_forever 的退避循环接管重连。
+        每次 Hello 都调用。每代心跳线程捕获启动时的 ``_hb_generation``；
+        旧的 join 超时未退出也不要紧——它醒来后发现代数已过期会立即
+        退出，不会再发送心跳，彻底避免"双心跳并发"。
+        连续 ``_HB_MAX_MISS`` 次无 ACK 主动断开，由 run_forever 退避重连。
         """
-        # 停旧线程（等它退出，最多等一个心跳周期的1/3，避免立即被拒收）
-        self._hb_stop.set()
-        if self._heartbeat_thread and self._heartbeat_thread.is_alive():
-            self._heartbeat_thread.join(timeout=2)
-        self._hb_stop.clear()
+        # 递增代数：旧线程（无论是否还活着）代数过期自动退出
+        self._hb_generation += 1
+        gen = self._hb_generation
         self._hb_ack_miss = 0
 
-        def _beat():
-            while not self._stop_event.is_set() and not self._hb_stop.is_set():
-                # 等待心跳间隔（可被终止事件提前唤醒）
+        def _beat(gen=gen):
+            while not self._stop_event.is_set():
+                # 代数过期（新连接已建立新心跳）→ 本线程立即退役
+                if gen != self._hb_generation:
+                    return
                 if self._hb_stop.wait(self._heartbeat_interval):
                     return
-                if self._stop_event.is_set() or self._hb_stop.is_set():
+                if self._stop_event.is_set() or gen != self._hb_generation:
                     return
+                # 顺带清理回复池过期条目（零成本防内存增长）
+                try:
+                    self._pool.cleanup()
+                except Exception:
+                    pass
                 ok = self._send_json({"op": OP_HEARTBEAT, "d": self.last_seq})
                 if not ok and self._logger:
                     self._logger.warning("[QQ官方] 心跳发送失败，连接可能已断开")
