@@ -211,6 +211,14 @@ class QQOfficialWSClient:
                     "  下 group_at_messages / c2c_messages 设为 false）。\n"
                     "  60 秒后重试（等待你开通权限/修改配置）"
                 )
+        elif status_code in (4010, 4011, 4012, 4013):
+            # 鉴权类错误：token 无效/未授权——重连无意义，终止重试循环
+            if self._logger:
+                self._logger.error(
+                    f"[QQ官方] 鉴权失败(code={status_code} reason={reason})："
+                    f"请检查 appid/secret 是否正确、token 是否过期。停止重连。"
+                )
+            self._stop_event.set()  # 让 _run_forever 循环退出
         elif self._logger:
             self._logger.info(
                 f"[QQ官方] WebSocket 关闭 (code={status_code} reason={reason})"
