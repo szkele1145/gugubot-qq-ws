@@ -8,6 +8,7 @@ from gugubot.logic.system.echo import EchoSystem
 from gugubot.logic.system.execute import ExecuteSystem
 from gugubot.logic.system.general_help import GeneralHelpSystem
 from gugubot.logic.system.key_word import KeyWordSystem
+from gugubot.logic.system.official_status import OfficialStatusSystem
 from gugubot.logic.system.player_list import PlayerListSystem
 from gugubot.logic.system.plugin_commands import PluginCommandSystem
 from gugubot.logic.system.startup_command import StartupCommandSystem

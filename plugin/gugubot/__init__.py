@@ -35,6 +35,7 @@ from gugubot.logic.system import (
     ExecuteSystem,
     GeneralHelpSystem,
     KeyWordSystem,
+    OfficialStatusSystem,
     PlayerListSystem,
     PluginCommandSystem,
     StartupCommandSystem,
@@ -200,6 +201,12 @@ async def on_load(server: PluginServerInterface, _) -> None:
     api = GUGUBotAPI(server, gugubot_config)
     plugin_command_system = PluginCommandSystem(server, api, config=gugubot_config)
     systems.insert(len(systems) - 1, plugin_command_system)
+
+    # 官方直连状态系统（#状态；仅官方模式下生效，OneBot 模式自动跳过）
+    official_status_system = OfficialStatusSystem(
+        connector_manager=connector_manager, config=gugubot_config
+    )
+    systems.insert(len(systems) - 1, official_status_system)
 
     for system in systems:
         system_manager.register_system(system)
