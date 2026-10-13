@@ -59,7 +59,7 @@ class QQTokenManager:
         return token, expire_in
 
     def get_token(self) -> str:
-        """获取可用 access_token（过期自动刷新）。"""
+        """获取可用 access_token（过期自动刷新；网络失败重试 1 次）。"""
         if not self.configured:
             raise RuntimeError("QQ 官方平台 appid/secret 未配置")
 
@@ -67,12 +67,23 @@ class QQTokenManager:
             if self._token and time.time() < self._expires_at:
                 return self._token
 
-            token, expire_in = self._fetch()
-            self._token = token
-            self._expires_at = time.time() + max(expire_in - _EXPIRE_MARGIN, 60)
-            if self._logger:
-                self._logger.debug("[QQ官方] access_token 已刷新")
-            return token
+            last_err: Optional[Exception] = None
+            for attempt in range(2):
+                try:
+                    token, expire_in = self._fetch()
+                    self._token = token
+                    self._expires_at = time.time() + max(expire_in - _EXPIRE_MARGIN, 60)
+                    if self._logger:
+                        self._logger.debug("[QQ官方] access_token 已刷新")
+                    return token
+                except Exception as e:
+                    last_err = e
+                    # 凭证错误不重试（appid/secret 错，重试无意义）
+                    msg = str(e)
+                    if "401" in msg or "403" in msg or "invalid" in msg.lower():
+                        break
+                    time.sleep(1 + attempt)
+            raise RuntimeError(f"获取 access_token 失败（已重试）: {last_err}")
 
     def auth_header(self) -> dict:
         """构造官方 API 需要的 Authorization 头（QQBot 前缀）。"""
