@@ -22,7 +22,13 @@ import requests
 from gugubot.connector.qq_official.reply_pool import QQReplyPool
 from gugubot.connector.qq_official.token_manager import QQTokenManager
 
+# 官方 API 基地址
 _API_BASE = "https://api.sgroup.qq.com"
+
+# 官方消息类型（群/单聊统一）
+MSG_TYPE_TEXT = 0      # 纯文本（content 字段）
+MSG_TYPE_MARKDOWN = 2  # Markdown（markdown.content 字段）
+MSG_TYPE_MEDIA = 7     # 富媒体（media.file_info 字段，来自 /files 上传）
 
 
 class QQOfficialAPIError(RuntimeError):
@@ -123,7 +129,7 @@ class QQOfficialClient:
             if taken:
                 msg_id, msg_seq = taken
 
-        payload: Dict[str, Any] = {"msg_type": 2, "content": content}
+        payload: Dict[str, Any] = {"msg_type": MSG_TYPE_TEXT, "content": content}
         if msg_id:
             payload["msg_id"] = msg_id
             if msg_seq is not None:
@@ -161,7 +167,7 @@ class QQOfficialClient:
                 msg_id, msg_seq = taken
 
         payload: Dict[str, Any] = {
-            "msg_type": 3,
+            "msg_type": MSG_TYPE_MEDIA,
             "media": media,
             "content": "",
         }
@@ -184,7 +190,7 @@ class QQOfficialClient:
             if taken:
                 msg_id, msg_seq = taken
 
-        payload = {"msg_type": 2, "content": content}
+        payload = {"msg_type": MSG_TYPE_TEXT, "content": content}
         if msg_id:
             payload["msg_id"] = msg_id
             if msg_seq is not None:
@@ -238,7 +244,7 @@ class QQOfficialClient:
                 msg_id, msg_seq = taken
 
         payload = {
-            "msg_type": 3,
+            "msg_type": MSG_TYPE_MEDIA,
             "media": {"file_info": file_info},
             "content": "",
         }

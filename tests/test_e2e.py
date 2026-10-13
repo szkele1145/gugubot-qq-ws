@@ -158,7 +158,7 @@ class FakeServerInfo:
 class FakeMCServer:
     def is_server_running(self): return True
     def get_server_information(self): return FakeServerInfo()
-    def execute_command(self, cmd): EXECUTED.append(cmd)
+    def execute(self, cmd): EXECUTED.append(cmd)
     def say(self, x): pass
 
 class FakeSM:
@@ -199,11 +199,11 @@ asyncio.new_event_loop().run_until_complete(_run())
 assert len(EXECUTED) == 1, EXECUTED
 cmd = EXECUTED[0]
 print("CMD:", cmd[:150])
-assert cmd.startswith('guguchat inject "Steve" "[QQ] '), cmd
+assert cmd.startswith('guguchat inject "QQ" "[QQ转发]'), cmd
 # CICode 应优先公网 url（客户端可访问），而非服务器本地路径
 assert "[[CICode,url=http://127.0.0.1:19878/img.png,name=截图]]" in cmd, cmd
 assert "看图" in cmd
-print("PASS: native_chat 端到端注入命令（CICode 公网图片 + 群前缀 + 转义）")
+print("PASS: native_chat 端到端注入命令（[QQ转发]格式 + CICode 公网图片 + 转义）")
 
 # ===== C2C 单聊链路 =====
 c2c_event = {

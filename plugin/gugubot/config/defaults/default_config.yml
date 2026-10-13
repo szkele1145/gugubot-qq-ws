@@ -29,9 +29,9 @@ connector:
       official: # QQ官方开放平台 :: (type=official 时生效) 在 https://q.qq.com 创建机器人后获取
         appid: "" # 机器人 AppID
         secret: "" # 机器人密钥（AppSecret）
-        intents: # 事件订阅
-          group_at_messages: true # 群聊@消息 :: 需在开放平台开通"QQ群"能力
-          c2c_messages: true # 单聊消息 :: 需在开放平台开通"QQ单聊"能力
+        intents: # 事件订阅（群聊与单聊同属 GROUP_AND_C2C_EVENT 位；对应开放平台"QQ群"能力）
+          group_at_messages: true # 群消息 :: @机器人消息 + 全量群消息（后者需在平台开启"接收所有消息"）
+          c2c_messages: false # 单聊消息 :: 需开通"QQ单聊"能力才可开启
           direct_message: false # 频道私信
           guild_messages: false # 频道消息
           interaction: false # 交互事件（按钮/指令）

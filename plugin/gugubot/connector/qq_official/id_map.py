@@ -189,15 +189,25 @@ class QQIDMapper:
     #    用户配置里的真实群号，实现与旧配置完全兼容。
 
     def register_legacy_groups(self, group_ids) -> None:
-        """登记配置文件中的真实群号（有序、去重）。"""
+        """登记配置文件中的目标（真实群号 或 openid 原文）。
+
+        - 纯数字 → 视为真实群号，进入待绑定槽位（收到群消息时按序自动绑定 openid）
+        - 非数字（如 32 位十六进制 openid）→ 直接自映射登记（填 openid 的场景）
+        """
         seen = set()
         with self._lock:
             order = []
             for gid in group_ids or []:
                 gid = str(gid).strip()
-                if gid and gid not in seen and gid.isdigit():
-                    seen.add(gid)
+                if not gid or gid in seen:
+                    continue
+                seen.add(gid)
+                if gid.isdigit():
                     order.append(gid)
+                else:
+                    # openid 原文：直接作为「自己映射自己」登记，发消息直接可用
+                    self._group_map.setdefault(gid, gid)
+                    self._group_rev.setdefault(gid, gid)
             # 保持已绑定关系不变，仅补充新槽位
             bound = set(self._legacy_group_openid.values())
             pending = [g for g in order if g not in bound]
@@ -210,19 +220,24 @@ class QQIDMapper:
     _legacy_group_order = None
 
     def bind_group_openid(self, group_openid: str) -> Optional[str]:
-        """把一个新出现的 group_openid 绑定到配置中的真实群号。
+        """把一个 group_openid 绑定到配置中的真实群号。
+
+        允许给「只有虚拟号的旧群」补绑定：早期版本运行时该群可能只
+        分配了虚拟号（_group_map 有记录但无真实绑定），只要它还没占
+        用配置槽位且待绑定列表非空，即可按顺序补绑。
 
         Returns
         -------
         Optional[str]
-            绑定到的真实群号；若无待绑定槽位返回 None。
+            绑定到的真实群号；无待绑定槽位或已绑定返回 None。
         """
         if not group_openid:
             return None
         with self._lock:
-            pending = self._pending_legacy_groups or []
-            if group_openid in self._legacy_group_openid:
+            if group_openid in self._openid_group_legacy:
+                # 已绑定真实群号
                 return None
+            pending = self._pending_legacy_groups or []
             if pending:
                 legacy = pending.pop(0)
                 self._legacy_group_openid[legacy] = group_openid
@@ -245,6 +260,11 @@ class QQIDMapper:
     # 统一入口
     # ------------------------------------------------------------------ #
 
+    def known_group_openids(self):
+        """所有已知群 openid（真实绑定 + 虚拟分配）。"""
+        with self._lock:
+            return set(self._openid_group_legacy.keys()) | set(self._group_map.keys())
+
     def to_legacy_group(self, group_openid: str) -> str:
         """group_openid → 下游使用的群号（优先真实群号）。"""
         with self._lock:
@@ -252,6 +272,14 @@ class QQIDMapper:
             if legacy:
                 return legacy
         return self.group_legacy_id(group_openid)
+
+    def group_legacy_display(self, group_openid: str) -> str:
+        """该群当前显示号（真实群号或虚拟号），未知返回空。"""
+        with self._lock:
+            legacy = self._openid_group_legacy.get(group_openid)
+            if legacy:
+                return legacy
+            return self._group_map.get(group_openid, "")
 
     def to_official_group(self, legacy_id: str) -> str:
         """下游群号（真实/虚拟）→ group_openid。"""

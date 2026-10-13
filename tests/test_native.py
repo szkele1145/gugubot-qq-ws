@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 import sys, types
 
 class _Any:
@@ -78,7 +78,7 @@ class FakeServer:
     def tr(self, *a, **k): return a[0] if a else ""
     def is_server_running(self): return True
     def get_server_information(self): return _Any()
-    def execute_command(self, cmd): EXECUTED.append(cmd)
+    def execute(self, cmd): EXECUTED.append(cmd)
     def say(self, x): pass
 
 conn = MCConnector.__new__(MCConnector)
@@ -114,18 +114,16 @@ asyncio.run(run())
 assert len(EXECUTED) == 1, EXECUTED
 cmd = EXECUTED[0]
 print("CMD:", cmd)
-assert cmd.startswith('guguchat inject "Steve" "'), cmd
+assert cmd.startswith('guguchat inject "QQ" "[QQ转发]Steve:'), cmd
 # 引号/反斜杠已转义
-assert chr(92) + chr(34) in cmd, cmd  # 引号已转义为 \" 
-# 群名前缀
-assert '"[QQ] ' in cmd, cmd
-print("PASS: native_chat 注入命令生成 + brigadier 转义 + 群前缀")
+assert chr(92) + chr(34) in cmd, cmd  # 引号已转义为 \"
+print("PASS: native_chat 注入命令生成 + [QQ转发]玩家名: 格式 + brigadier 转义")
 
-# show_group_prefix=false
+# show_group_prefix=false → 无前缀（纯消息）
 cfg["connector"]["minecraft"]["native_chat"]["show_group_prefix"] = False
 EXECUTED.clear()
 asyncio.run(run())
-assert '"[QQ] ' not in EXECUTED[0], EXECUTED[0]
+assert EXECUTED[0].startswith('guguchat inject "QQ" "[QQ转发]') is False or '"[QQ转发]' not in EXECUTED[0], EXECUTED[0]
 print("PASS: show_group_prefix=false 无前缀")
 
 print()

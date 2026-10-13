@@ -33,6 +33,16 @@ from gugubot.utils.types import BroadcastInfo, Source
 
 # <@!xxxx> 官方 at 机器人标记
 _AT_BOT_PATTERN = re.compile(r"<@!\s*[A-Za-z0-9_-]+\s*>")
+# <faceType=...,faceId=...,ext=...> QQ 原生小表情标记（清理为空，避免乱码文本）
+_FACE_PATTERN = re.compile(r"<faceType=\d+[^>]*>")
+# 保留 [CICode,...]] 图片标签（AtomChat/ChatImage 识别）
+
+
+def _clean_official_content(text: str) -> str:
+    """清理官方消息 content 里的平台标记（@机器人、face 表情）。"""
+    text = _AT_BOT_PATTERN.sub("", text)
+    text = _FACE_PATTERN.sub("", text)
+    return text
 
 
 class QQOfficialParser(BasicParser):
@@ -83,13 +93,15 @@ class QQOfficialParser(BasicParser):
             event_name = raw_message.get("_event_name", "")
             data = raw_message.get("_data", raw_message)
 
-            if event_name == "GROUP_AT_MESSAGE_CREATE":
+            if event_name in ("GROUP_AT_MESSAGE_CREATE", "GROUP_MESSAGE_CREATE"):
+                # GROUP_MESSAGE_CREATE = 全量群消息（机器人开启"接收所有消息"后，
+                # 不用@机器人也能收到；字段与 GROUP_AT_MESSAGE_CREATE 完全一致）
                 return await self._parse_group_message(data)
             elif event_name == "C2C_MESSAGE_CREATE":
                 return await self._parse_c2c_message(data)
             elif event_name in ("FRIEND_ADD",):
                 return self._parse_friend_add(data)
-            elif event_name in ("GROUP_ADD_ROM", "GROUP_DEL_ROM"):
+            elif event_name in ("GROUP_ADD_ROBOT", "GROUP_DEL_ROBOT", "GROUP_ADD_ROM", "GROUP_DEL_ROM"):
                 return self._parse_group_bot_change(data, event_name)
             return None
         except Exception as e:
@@ -121,20 +133,35 @@ class QQOfficialParser(BasicParser):
         # （用户在 permissions.group_ids 里填了真实群号，此群第一条
         #   消息到达时按登记顺序自动绑定，实现旧配置完全兼容）
         if not id_mapper.legacy_group_display_id(group_openid):
-            id_mapper.bind_group_openid(group_openid)
+            bound = id_mapper.bind_group_openid(group_openid)
+            if bound is None and self.logger:
+                # 无可绑定槽位：该群用虚拟号继续（仅当配置含虚拟号或
+                # 后续绑定时才会转发），打 info 便于排查
+                display = id_mapper.group_legacy_display(group_openid)
+                self.logger.info(
+                    f"[QQ官方] 群 {group_openid} 没有可用配置槽位，"
+                    f"当前显示号 {display or '(未分配)'}；"
+                    f"如需转发请在 group_ids 配置其群号或等待自动绑定"
+                )
 
         # openid → 虚拟号 / 绑定真实群号
         legacy_group = id_mapper.to_legacy_group(group_openid)
         legacy_user = id_mapper.to_legacy_user(member_openid)
 
         content = data.get("content", "") or ""
-        # 去掉 @机器人 标记（官方会在消息头加）
-        content = _AT_BOT_PATTERN.sub("", content).strip()
+        # 清理 @机器人 / face 表情等平台标记
+        content = _clean_official_content(content).strip()
 
         # 富媒体附件 → image/record/video 段
         segments = self._build_segments(content, data.get("attachments"))
 
-        sender_name = f"成员{legacy_user[-4:]}"
+        # 显示名：官方下发真实昵称 username（新平台能力）；没有则回退虚拟号
+        username = (author.get("username", "") or "").strip()
+        sender_name = username or f"成员{legacy_user[-4:]}"
+
+        # 群内角色（新平台能力）：owner/admin 视为管理员
+        member_role = (author.get("member_role", "") or "").strip().lower()
+        role_is_admin = member_role in ("owner", "admin")
 
         if await self._should_exclude_user(legacy_user):
             self.logger.debug(f"已在connector层拦截排除用户 {legacy_user} 的消息")
@@ -142,7 +169,11 @@ class QQOfficialParser(BasicParser):
 
         # 权限校验：该群是否在监听列表（含绑定真实群号）
         if not self._is_valid_group(legacy_group):
-            self.logger.debug(f"群 {legacy_group} 不在监听列表，忽略消息")
+            if self.logger:
+                self.logger.info(
+                    f"[QQ官方] 群 {legacy_group}（openid {group_openid}）"
+                    f"不在监听列表（group_ids/admin_group_ids），消息已忽略"
+                )
             return None
 
         self._current_source_id = legacy_group
@@ -158,7 +189,9 @@ class QQOfficialParser(BasicParser):
             source_id=str(legacy_group),
             sender=sender_name,
             sender_id=legacy_user,
-            is_admin=self._is_admin(legacy_user) or self._is_admin_group(legacy_group),
+            is_admin=role_is_admin
+            or self._is_admin(legacy_user)
+            or self._is_admin_group(legacy_group),
         )
 
     # ------------------------------------------------------------------ #
@@ -178,7 +211,7 @@ class QQOfficialParser(BasicParser):
 
         legacy_user = id_mapper.to_legacy_user(user_openid)
         content = (data.get("content", "") or "").strip()
-        content = _AT_BOT_PATTERN.sub("", content).strip()
+        content = _clean_official_content(content).strip()
 
         segments = self._build_segments(content, data.get("attachments"))
 
@@ -187,6 +220,9 @@ class QQOfficialParser(BasicParser):
 
         # 官方单聊默认不放开权限（无 friend_is_admin 概念），保持与管理员列表匹配
         is_admin = self._is_admin(legacy_user)
+
+        # 显示名：官方下发真实昵称（新平台能力），没有则回退虚拟号
+        username = ((data.get("author", {}) or {}).get("username", "") or "").strip()
 
         return BroadcastInfo(
             event_type="message",
@@ -197,7 +233,7 @@ class QQOfficialParser(BasicParser):
             logger=self.logger,
             _source=Source(self.connector.source),
             source_id=str(legacy_user),
-            sender=f"用户{legacy_user[-4:]}",
+            sender=username or f"用户{legacy_user[-4:]}",
             sender_id=legacy_user,
             is_admin=is_admin,
         )
@@ -263,13 +299,21 @@ class QQOfficialParser(BasicParser):
     # ------------------------------------------------------------------ #
 
     def _is_valid_group(self, legacy_group: str) -> bool:
-        """群是否在监听列表（真实群号或已绑定 openid）。"""
+        """群是否在监听列表。
+
+        规则：
+        - 配置了 group_ids/admin_group_ids：只监听列出的群号（含绑定后的真实群号）
+        - 未配置任何群号：监听所有「已绑定/已分配」的群（宽松模式）
+        """
         config = self.connector.config
         group_ids = config.get_keys(["connector", "QQ", "permissions", "group_ids"], [])
         admin_groups = config.get_keys(
             ["connector", "QQ", "permissions", "admin_group_ids"], []
         )
         valid = {str(g) for g in (group_ids + admin_groups) if g}
+        if not valid:
+            # 宽松模式：没配置群号时，凡是有映射（真实绑定或虚拟分配）的群都放行
+            return bool(legacy_group)
         return str(legacy_group) in valid
 
     def _is_admin_group(self, legacy_group: str) -> bool:

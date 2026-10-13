@@ -1,4 +1,4 @@
-﻿import sys, types, json, threading, time, socket, base64, hashlib, struct
+import sys, types, json, threading, time, socket, base64, hashlib, struct
 
 # ===== stub mcdreforged =====
 class _Any:
@@ -109,7 +109,7 @@ def handle_client(conn):
         if op == 2:  # Identify
             d = data.get("d", {})
             assert d.get("token", "").startswith("QQBot "), "token 必须带 QQBot 前缀"
-            assert d.get("intents") == 1 | (1 << 4), f"intents 错误: {d.get('intents')}"
+            assert d.get("intents") == 1 << 25, f"intents 错误: {d.get('intents')}（应为 GROUP_AND_C2C_EVENT）"
             assert d.get("shard") == [0, 1]
             send_text(json.dumps({
                 "op": 0, "s": 1, "t": "READY",
@@ -156,7 +156,7 @@ from gugubot.connector.qq_official.ws_client import QQOfficialWSClient
 ws = QQOfficialWSClient(
     api_client=api,
     token_manager=tm,
-    intents=1 | (1 << 4),
+    intents=1 << 25,
     logger=FakeLogger(),
     on_dispatch=lambda t, s, d: dispatches.append((t, s, d)),
 )

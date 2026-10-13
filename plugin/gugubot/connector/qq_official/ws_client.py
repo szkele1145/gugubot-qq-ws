@@ -36,12 +36,21 @@ import websocket
 
 from gugubot.connector.qq_official.api_client import QQOfficialClient
 
-# intents 位
-INTENT_PUBLIC_GUILD_MESSAGES = 1 << 30
-INTENT_DIRECT_MESSAGE = 1 << 12
-INTENT_GROUP_AT_MESSAGES = 1 << 0
-INTENT_C2C_MESSAGE_CREATE = 1 << 4
-INTENT_INTERACTION = 1 << 26
+# intents 位（官方文档 https://bot.qq.com/wiki/develop/api-v2/dev-prepare/interface-framework/event-emit.html）
+# 注意：GROUP_AT_MESSAGE_CREATE / C2C_MESSAGE_CREATE / FRIEND_* / GROUP_ADD_ROBOT 等
+# 全部属于 GROUP_AND_C2C_EVENT (1<<25)，需在开放平台开通"QQ群/单聊"能力
+INTENT_GUILDS = 1 << 0                     # 频道信息（基础默认）
+INTENT_GUILD_MEMBERS = 1 << 1               # 频道成员（基础默认）
+INTENT_GUILD_MESSAGES = 1 << 9              # 频道消息（私域）
+INTENT_DIRECT_MESSAGE = 1 << 12             # 频道私信
+INTENT_GROUP_AND_C2C_EVENT = 1 << 25        # ★ 群/单聊事件（群@消息、全量群消息、C2C、好友、机器人进出群）
+INTENT_INTERACTION = 1 << 26                # 交互事件
+INTENT_MESSAGE_AUDIT = 1 << 27               # 消息审核
+INTENT_PUBLIC_GUILD_MESSAGES = 1 << 30      # 频道@消息（公域，基础默认）
+
+# 兼容旧名（历史上误定义，保留引用不破坏导入）
+INTENT_GROUP_AT_MESSAGES = INTENT_GROUP_AND_C2C_EVENT
+INTENT_C2C_MESSAGE_CREATE = INTENT_GROUP_AND_C2C_EVENT
 
 _DEFAULT_WSS = "wss://api.sgroup.qq.com/websocket/"
 
@@ -95,6 +104,8 @@ class QQOfficialWSClient:
         # 心跳线程控制
         self._hb_stop = threading.Event()
         self._hb_ack_miss = 0
+        # 最近一次关闭码（4014 等鉴权类错误用长退避）
+        self._last_close_code: Optional[int] = None
 
     # ------------------------------------------------------------------ #
     # 连接管理
@@ -154,7 +165,11 @@ class QQOfficialWSClient:
         while not self._stop_event.is_set():
             try:
                 self.ws.run_forever()
-                backoff = 3  # 连接成功过则重置退避
+                # 4014（能力未开通）时用长退避，其余重置
+                if self._last_close_code == 4014:
+                    backoff = 60
+                else:
+                    backoff = 3  # 连接成功过则重置退避
             except Exception as e:
                 if self._logger:
                     self._logger.error(f"[QQ官方] WS 运行异常: {e}\n{traceback.format_exc()}")
@@ -181,8 +196,22 @@ class QQOfficialWSClient:
 
     def _on_close(self, _, status_code, reason) -> None:
         self._ready = False
-        if self._logger:
-            self._logger.info(f"[QQ官方] WebSocket 关闭 (code={status_code} reason={reason})")
+        self._last_close_code = status_code
+        if status_code == 4014:
+            # disallowed intents：机器人未开通对应能力，重连必然再被拒
+            if self._logger:
+                self._logger.error(
+                    "[QQ官方] 连接被拒(4014 disallowed intents)：机器人未开通所订阅的消息能力。\n"
+                    "  解决：q.qq.com → 机器人管理 → 开发/权限管理 → 申请并审核通过\n"
+                    "  「QQ群」与「QQ单聊」能力；审核通过前可把配置里未开通的\n"
+                    "  intents 关掉（connector.QQ.connection.official.intents\n"
+                    "  下 group_at_messages / c2c_messages 设为 false）。\n"
+                    "  60 秒后重试（等待你开通权限/修改配置）"
+                )
+        elif self._logger:
+            self._logger.info(
+                f"[QQ官方] WebSocket 关闭 (code={status_code} reason={reason})"
+            )
 
     def _on_message(self, _, raw: str) -> None:
         try:
@@ -245,7 +274,8 @@ class QQOfficialWSClient:
             self._ready = True
             if self._logger:
                 self._logger.info(
-                    f"[QQ官方] 鉴权成功（READY），bot 开放平台 ID: {user.get('id')}"
+                    f"[QQ官方] 鉴权成功（READY），bot 开放平台 ID: {user.get('id')}；"
+                    f"等待群/单聊事件（在群里 @机器人 发消息即可触发绑定）"
                 )
             if self._on_ready:
                 try:
@@ -289,7 +319,10 @@ class QQOfficialWSClient:
             },
         }
         if self._logger:
-            self._logger.info("[QQ官方] 发送 Identify（鉴权）")
+            self._logger.info(
+                f"[QQ官方] 发送 Identify（鉴权，intents={self._intents} "
+                f"shard=[0,1]）"
+            )
         self._send_json(payload)
 
     def _send_resume(self) -> None:

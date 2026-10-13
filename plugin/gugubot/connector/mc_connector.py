@@ -203,22 +203,29 @@ class MCConnector(BasicConnector):
             source = custom_group_name.get(source_id, source)
 
             # ----- native_chat 模式：原生聊天包注入（需 GuguChat mod） -----
+            # 注入格式：[QQ转发]玩家名:我是玩家说的话
+            #   - 玩家名 = 绑定的游戏名（有绑定）或 QQ 侧显示名（无绑定）
+            #   - 消息注入为"控制台"身份的聊天头 + 正文带 [QQ转发] 前缀
             if self._check_native_chat_available():
                 show_prefix = self.config.get_keys(
                     ["connector", "minecraft", "native_chat", "show_group_prefix"], True
                 )
                 plain = segments_to_plain_text(message, image_as="cicode")
-                if show_prefix and source:
-                    plain = f"[{source}] {plain}"
                 plain = plain.replace("\n", " ").replace("\r", " ").strip()
-                display_name = (sender or source or "QQ").strip()
+
+                # sender：优先绑定游戏名（player_manager 已解析），
+                # 未绑定的 QQ 用户显示原始昵称
+                display_name = (sender or "QQ用户").strip()
                 display_name = display_name.replace('"', "").replace(" ", "_")
-                cmd = (
-                    f'guguchat inject "{display_name}" '
-                    f'"{plain.replace(chr(92), chr(92) * 2).replace(chr(34), chr(92) + chr(34))}"'
-                )
+
+                # 正文 = [QQ转发]玩家名:消息
+                body = f"[QQ转发]{display_name}:{plain}" if show_prefix else plain
+                body = body.replace(chr(92), chr(92) * 2).replace(chr(34), chr(92) + chr(34))
+                cmd = f'guguchat inject "QQ" "{body}"'
                 try:
-                    self.server.execute_command(cmd)
+                    # 注意：execute() 才是发送到服务器 stdin 的服务端命令；
+                    # execute_command() 是 MCDR 自己的 !! 命令系统，走不到 mod
+                    self.server.execute(cmd)
                     return
                 except Exception as e:
                     # mod 未安装/命令失败 → 回退 say

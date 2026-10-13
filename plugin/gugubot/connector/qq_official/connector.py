@@ -47,9 +47,8 @@ from gugubot.connector.qq_official.parser import QQOfficialParser
 from gugubot.connector.qq_official.reply_pool import QQReplyPool
 from gugubot.connector.qq_official.token_manager import QQTokenManager
 from gugubot.connector.qq_official.ws_client import (
-    INTENT_C2C_MESSAGE_CREATE,
     INTENT_DIRECT_MESSAGE,
-    INTENT_GROUP_AT_MESSAGES,
+    INTENT_GROUP_AND_C2C_EVENT,
     INTENT_INTERACTION,
     INTENT_PUBLIC_GUILD_MESSAGES,
     QQOfficialWSClient,
@@ -296,6 +295,13 @@ class QQOfficialConnector(BasicConnector):
         admin_groups = config.get_keys(
             ["connector", "QQ", "permissions", "admin_group_ids"], []
         )
+        if self.logger:
+            self.logger.info(
+                f"{self.log_prefix} 监听配置读取结果：group_ids={group_ids!r} "
+                f"forward_group_ids={forward_ids!r} admin_group_ids={admin_groups!r}"
+                + ("（提示：均为空 = 宽松模式监听所有已绑定群）"
+                   if not any([group_ids, forward_ids, admin_groups]) else "")
+            )
         self.id_mapper.register_legacy_groups(group_ids + forward_ids + admin_groups)
 
         # intents
@@ -318,14 +324,23 @@ class QQOfficialConnector(BasicConnector):
             return None
 
     def _build_intents(self, config: BotConfig) -> int:
+        """按官方 intent 表构建订阅位。
+
+        群/单聊事件全部属于 GROUP_AND_C2C_EVENT (1<<25)——只要开通了
+        「QQ群」或「QQ单聊」任一能力就订阅该位；群全量消息
+        （GROUP_MESSAGE_CREATE，无需@机器人）由同一 intent 位下发，
+        受机器人「接收所有消息」开关控制。
+        """
         intents_cfg = config.get_keys(
             ["connector", "QQ", "connection", "official", "intents"], {}
         )
         intents = 0
-        if intents_cfg.get("group_at_messages", True):
-            intents |= INTENT_GROUP_AT_MESSAGES
-        if intents_cfg.get("c2c_messages", True):
-            intents |= INTENT_C2C_MESSAGE_CREATE
+        # 群@消息 / 全量群消息 / C2C —— 同一位 (1<<25)
+        group_at = intents_cfg.get("group_at_messages", True)
+        c2c = intents_cfg.get("c2c_messages", True)
+        if group_at or c2c:
+            intents |= INTENT_GROUP_AND_C2C_EVENT
+        # 频道类（默认关，避免无权限位导致 4014）
         if intents_cfg.get("direct_message", False):
             intents |= INTENT_DIRECT_MESSAGE
         if intents_cfg.get("guild_messages", False):
@@ -387,6 +402,12 @@ class QQOfficialConnector(BasicConnector):
         """WS Dispatch 事件 → 丢给 parser（MCDR 事件循环）。"""
         if not self.enable:
             return
+        # 事件到达的可见日志（排查"群里没反应"的关键观测点）
+        if self.logger:
+            show_msg = str(data.get("content", ""))[:40] if isinstance(data, dict) else ""
+            self.logger.info(
+                f"{self.log_prefix} 收到官方事件 {event_type} (seq={seq}){('：' + show_msg) if show_msg else ''}"
+            )
         try:
             task = {"_event_name": event_type, "_data": data}
             self.server.schedule_task(self.parser.process_message(task))
@@ -464,11 +485,15 @@ class QQOfficialConnector(BasicConnector):
 
             # 官方模式防护：目标群还没绑定 openid（群里还没人 @机器人）时
             # REST 地址无法确定（原样拼进 URL 只会 404），跳过并提示。
-            # 判据：群号既不是已绑定的真实/虚拟群号，也不是 openid 原文。
+            # 放行三类：①已绑定的真实/虚拟群号 ②openid 原文（用户直接填
+            # openid 进配置的场景）③映射表能翻译的号码。
             if target_type == "group":
-                mapped = self.id_mapper.to_official_group(target_id)
-                bound = self.id_mapper.is_legacy_group(target_id) or (
-                    mapped != str(target_id)
+                t = str(target_id)
+                mapped = self.id_mapper.to_official_group(t)
+                bound = (
+                    self.id_mapper.is_legacy_group(t)
+                    or (mapped != t)       # 能映射出不同的 openid
+                    or not t.isdigit()      # openid 原文（非纯数字）
                 )
                 if not bound:
                     self.logger.warning(
