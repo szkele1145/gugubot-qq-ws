@@ -158,7 +158,7 @@ ws = QQOfficialWSClient(
     token_manager=tm,
     intents=1 << 25,
     logger=FakeLogger(),
-    on_dispatch=lambda t, s, d: dispatches.append((t, s, d)),
+    on_dispatch=lambda t, s, d, e="": dispatches.append((t, s, d, e)),
 )
 ws.connect()
 

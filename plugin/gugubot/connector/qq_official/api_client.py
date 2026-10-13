@@ -121,8 +121,8 @@ class QQOfficialClient:
     ) -> Dict[str, Any]:
         """发送群消息文本。
 
-        未显式给 msg_id 时从回复池取最新的（被动回复），从而绕开
-        主动消息月度限额；池子空则退化为主动消息（可能受限）。
+        被动回复降级链：msg_id 池（msg_seq 递增）→ event_id 池 → 主动
+        消息（可能受月度限额）。
         """
         if msg_id is None:
             taken = self._pool.take(group_openid)
@@ -134,6 +134,11 @@ class QQOfficialClient:
             payload["msg_id"] = msg_id
             if msg_seq is not None:
                 payload["msg_seq"] = msg_seq
+        else:
+            # msg_id 通道无货 → 尝试 event_id 备用通道
+            event_id = self._pool.take_event(group_openid)
+            if event_id:
+                payload["event_id"] = event_id
         return self._request("POST", f"/v2/groups/{group_openid}/messages", payload)
 
     def send_group_media_message(

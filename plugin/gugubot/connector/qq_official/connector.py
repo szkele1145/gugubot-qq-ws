@@ -399,7 +399,7 @@ class QQOfficialConnector(BasicConnector):
             )
             raise
 
-    def _on_ws_dispatch(self, event_type: str, seq: int, data: dict) -> None:
+    def _on_ws_dispatch(self, event_type: str, seq: int, data: dict, event_id: str = "") -> None:
         """WS Dispatch 事件 → 丢给 parser（MCDR 事件循环）。"""
         if not self.enable:
             return
@@ -410,7 +410,7 @@ class QQOfficialConnector(BasicConnector):
                 f"{self.log_prefix} 收到官方事件 {event_type} (seq={seq}){('：' + show_msg) if show_msg else ''}"
             )
         try:
-            task = {"_event_name": event_type, "_data": data}
+            task = {"_event_name": event_type, "_data": data, "_event_id": event_id}
             self.server.schedule_task(self.parser.process_message(task))
         except Exception as e:
             self.logger.error(

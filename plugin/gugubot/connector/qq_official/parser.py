@@ -96,9 +96,13 @@ class QQOfficialParser(BasicParser):
             if event_name in ("GROUP_AT_MESSAGE_CREATE", "GROUP_MESSAGE_CREATE"):
                 # GROUP_MESSAGE_CREATE = 全量群消息（机器人开启"接收所有消息"后，
                 # 不用@机器人也能收到；字段与 GROUP_AT_MESSAGE_CREATE 完全一致）
-                return await self._parse_group_message(data)
+                return await self._parse_group_message(
+                    data, event_id=raw_message.get("_event_id", "")
+                )
             elif event_name == "C2C_MESSAGE_CREATE":
-                return await self._parse_c2c_message(data)
+                return await self._parse_c2c_message(
+                    data, event_id=raw_message.get("_event_id", "")
+                )
             elif event_name in ("FRIEND_ADD",):
                 return self._parse_friend_add(data)
             elif event_name in ("GROUP_ADD_ROBOT", "GROUP_DEL_ROBOT", "GROUP_ADD_ROM", "GROUP_DEL_ROM"):
@@ -116,7 +120,9 @@ class QQOfficialParser(BasicParser):
     # 群消息
     # ------------------------------------------------------------------ #
 
-    async def _parse_group_message(self, data: dict) -> Optional[BroadcastInfo]:
+    async def _parse_group_message(
+        self, data: dict, event_id: str = ""
+    ) -> Optional[BroadcastInfo]:
         connector = self.connector
         id_mapper = connector.id_mapper
 
@@ -124,10 +130,11 @@ class QQOfficialParser(BasicParser):
         author = data.get("author", {}) or {}
         member_openid = author.get("member_openid", "")
 
-        # 先入回复池（Gensokyo 式绕限额的关键：收到即可回复）
+        # 先入回复池（Gensokyo 式绕限额的关键：收到即可回复；附带外层
+        # event_id 作为 msg_id 通道用尽后的备用被动回复通道）
         msg_id = data.get("id", "")
         if msg_id:
-            connector.reply_pool.add(group_openid, msg_id)
+            connector.reply_pool.add(group_openid, msg_id, event_id=event_id)
 
         # 新群首次出现：尝试绑定到配置中的真实群号槽位
         # （用户在 permissions.group_ids 里填了真实群号，此群第一条
@@ -164,6 +171,12 @@ class QQOfficialParser(BasicParser):
         # 显示名：官方下发真实昵称 username（新平台能力）；没有则回退虚拟号
         username = (author.get("username", "") or "").strip()
         sender_name = username or f"成员{legacy_user[-4:]}"
+
+        # 机器人消息过滤（官方事件 author.bot 字段明确标注机器人身份）：
+        # 拦掉 Q群管家等系统机器人的消息，防止转发回声循环
+        if author.get("bot", False):
+            self.logger.debug(f"[QQ官方] 拦截机器人消息（{username}），不转发")
+            return None
 
         # 群内角色（新平台能力）：owner/admin 视为管理员
         member_role = (author.get("member_role", "") or "").strip().lower()
@@ -204,7 +217,9 @@ class QQOfficialParser(BasicParser):
     # C2C 单聊
     # ------------------------------------------------------------------ #
 
-    async def _parse_c2c_message(self, data: dict) -> Optional[BroadcastInfo]:
+    async def _parse_c2c_message(
+        self, data: dict, event_id: str = ""
+    ) -> Optional[BroadcastInfo]:
         connector = self.connector
         id_mapper = connector.id_mapper
 
@@ -213,7 +228,7 @@ class QQOfficialParser(BasicParser):
         )
         msg_id = data.get("id", "")
         if msg_id:
-            connector.reply_pool.add(f"c2c:{user_openid}", msg_id)
+            connector.reply_pool.add(f"c2c:{user_openid}", msg_id, event_id=event_id)
 
         legacy_user = id_mapper.to_legacy_user(user_openid)
         content = (data.get("content", "") or "").strip()

@@ -41,17 +41,23 @@ class QQReplyPool:
 
     # ------------------------------------------------------------------ #
 
-    def add(self, group_openid: str, msg_id: str) -> None:
-        """收到消息时入池。"""
+    def add(self, group_openid: str, msg_id: str, event_id: str = "") -> None:
+        """收到消息时入池（可附带事件外层 id 作为备用被动回复通道）。"""
         if not group_openid or not msg_id:
             return
         with self._lock:
             pool = self._pools.setdefault(group_openid, OrderedDict())
             if msg_id in pool:
+                # 已存在：补充 event_id（可能事件先到、后来才有外层id）
+                if event_id:
+                    pool[msg_id]["event_id"] = event_id
                 return
             while len(pool) >= _POOL_LIMIT:
                 pool.popitem(last=False)
-            pool[msg_id] = {"seq": 0, "ts": time.time()}
+            info = {"seq": 0, "ts": time.time()}
+            if event_id:
+                info["event_id"] = event_id
+            pool[msg_id] = info
 
     def take(self, group_openid: str) -> Optional[Tuple[str, int]]:
         """取池中最新的 msg_id 和下一个 msg_seq。
@@ -80,6 +86,24 @@ class QQReplyPool:
                 info["seq"] = seq + 1
                 return msg_id, seq
 
+            return None
+
+    def take_event(self, group_openid: str) -> Optional[str]:
+        """取最新的 event_id（外层事件 id 被动回复备用通道）。
+
+        msg_id 通道用尽/过期时使用；event_id 每个事件也受 5 次限制，
+        这里不做次数追踪（超限时官方报错，drop 即可）。
+        """
+        now = time.time()
+        with self._lock:
+            pool = self._pools.get(group_openid)
+            if not pool:
+                return None
+            for msg_id in reversed(list(pool.keys())):
+                info = pool[msg_id]
+                eid = info.get("event_id", "")
+                if eid and now - info["ts"] <= _MSG_TTL:
+                    return eid
             return None
 
     def drop(self, group_openid: str, msg_id: str) -> None:

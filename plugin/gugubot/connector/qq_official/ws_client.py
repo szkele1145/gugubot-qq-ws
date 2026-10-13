@@ -289,7 +289,12 @@ class QQOfficialWSClient:
 
         if self._on_dispatch:
             try:
-                self._on_dispatch(event_type, seq, payload)
+                # 事件外层 id（event_id）一并传递：备用被动回复通道
+                # （兼容 3 参回调：TypeError 时按旧签名重试）
+                try:
+                    self._on_dispatch(event_type, seq, payload, data.get("id", ""))
+                except TypeError:
+                    self._on_dispatch(event_type, seq, payload)
             except Exception as e:
                 if self._logger:
                     self._logger.error(f"[QQ官方] 事件处理异常: {e}\n{traceback.format_exc()}")
