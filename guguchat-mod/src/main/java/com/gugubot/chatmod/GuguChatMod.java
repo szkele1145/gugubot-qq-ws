@@ -25,11 +25,12 @@ public class GuguChatMod {
 
     private void onRegisterCommands(RegisterCommandsEvent event) {
         GuguChatCommand.register(event.getDispatcher());
+        LOGGER.info("命令已注册：/guguchat inject | /guguchat status");
     }
 
     private void onServerStarted(ServerStartedEvent event) {
         ChatInjector.setServer(event.getServer());
-        LOGGER.info("GuguChatMod 已就绪：/guguchat inject <player|console> <消息>");
+        LOGGER.info("GuguChatMod 已就绪：/guguchat inject <显示名> <消息> | /guguchat status");
     }
 
     private void onServerStopping(ServerStoppingEvent event) {
