@@ -1,0 +1,30 @@
+{
+  "modLoader": "javafml",
+  "loaderVersion": "[4,)",
+  "license": "MIT",
+  "mods": [
+    {
+      "modId": "guguchat",
+      "version": "1.0.0",
+      "displayName": "GuguChat - Native QQ Chat Injection",
+      "description": "Works with the GUGUBot MCDR plugin: injects QQ->MC forwarded messages as native player chat packets (bound player name), compatible with chat UI mods such as AtomChat.",
+      "authors": ["GUGUBot"],
+      "dependencies": [
+        {
+          "modId": "neoforge",
+          "type": "required",
+          "versionRange": "[21.1.0,)",
+          "ordering": "NONE",
+          "side": "SERVER"
+        },
+        {
+          "modId": "minecraft",
+          "type": "required",
+          "versionRange": "[1.21.1,1.22)",
+          "ordering": "NONE",
+          "side": "SERVER"
+        }
+      ]
+    }
+  ]
+}

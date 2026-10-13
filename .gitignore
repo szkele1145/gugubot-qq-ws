@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# 构建产物（jar 交付物保留在根目录，不忽略）
+guguchat-mod/build/
+guguchat-mod/run/
+guguchat-mod/.gradle/
+
+# Gradle
+.gradle/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# 系统
+Thumbs.db
+.DS_Store
+
+# 附件下载目录（运行期生成）
+attachments/
+
+# 第三方参考程序（非本工程产物）
+gensokyo-windows-amd64-noWebui.exe

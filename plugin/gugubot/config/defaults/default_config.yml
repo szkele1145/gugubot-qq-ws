@@ -1,0 +1,282 @@
+######################### GUGUBot设置 #################################
+
+GUGUBot:
+  command_prefix: "#"   # 命令前缀
+  group_admin: false   # 群指令 :: 只能被咱们的管理员执行
+
+  show_message_in_console: false   # 展示超详细上报消息
+
+########################### 连接设置 ##################################
+
+connector:
+  QQ: # QQ连接器
+    source_name: "QQ" # QQ 显示名称
+    enable: true # 是否启用
+    enable_receive: true # 是否接收转发 :: 其他 connector 的 echo 转发时不转发到此 connector
+    enable_send: true # 是否发送 :: 广播时是否向此 connector 发送（在 echo 等逻辑处即不投递）
+    connection:
+      type: onebot # 连接类型 :: onebot = OneBot v11 反向WS（NapCat/Lagrange等）；official = QQ官方开放平台WS直连
+      host: 127.0.0.1 # 主机地址 :: (onebot)
+      port: 8777 # 端口 :: (onebot)
+      post_path: "" # 路径 :: (onebot)
+      use_ssl: false # 是否使用SSL :: (onebot)
+      verify: true # 是否验证证书 :: (onebot)
+      ca_certs: "" # 证书路径 :: (onebot)
+      sslopt: { } # SSL选项 :: (onebot)
+      reconnect: 5 # 重连时间
+      max_wait_time: 5 # 最大等待时间
+      token: "" # QQ 令牌 :: (onebot)
+      official: # QQ官方开放平台 :: (type=official 时生效) 在 https://q.qq.com 创建机器人后获取
+        appid: "" # 机器人 AppID
+        secret: "" # 机器人密钥（AppSecret）
+        intents: # 事件订阅
+          group_at_messages: true # 群聊@消息 :: 需在开放平台开通"QQ群"能力
+          c2c_messages: true # 单聊消息 :: 需在开放平台开通"QQ单聊"能力
+          direct_message: false # 频道私信
+          guild_messages: false # 频道消息
+          interaction: false # 交互事件（按钮/指令）
+        # 说明：官方平台隐私保护下只有 openid（非真实QQ号）。插件自动维护
+        # openid ↔ 虚拟号码 映射；配置里 group_ids 填真实群号的场合，第一个
+        # 在该群收到 @消息 的群会按顺序自动绑定到配置群号，旧配置无需改动。
+    permissions:
+      admin_ids: # 管理员QQ号
+        - 1377820366
+        -
+
+      admin_group_ids: # 管理群群号 :: (可选)群内所有成员拥有管理权限
+        -
+        -
+
+      group_ids: # qq群号 :: 要监听的qq群号（这些群的消息会转发到MC）
+        - 12345615646416
+
+      forward_group_ids: # 转发目标群号 :: MC消息转发到这些群（留空则使用group_ids）
+        -
+
+      notice_forward_groups: # 通知专用转发群号 :: 服务器开关机、玩家进出、成就/死亡通知转发到这些群（留空则使用forward_group_ids）
+        -
+
+      friend_is_admin: false       # 好友即是管理 :: 开放管理权限给机器人好友
+      custom_group_name: # 自定义游戏内显示群名 :: （可选）不设置默认转发[群名称]
+        "726741344": 定制的显示群名         # 如无需自定义，无视这行
+
+    chat_templates: # MC到QQ的聊天消息模板 :: 转发消息时根据权重随机选择模板（权重越高被选中概率越大）
+      - "({display_name}) {sender}: ": 1
+      - "[{display_name}] {sender}: ": 1
+      - "{display_name} | {sender} 说：": 1
+      - "{display_name} 的 {sender} : ": 1
+
+    others:
+      forward_other_bot: false       # 转发官方机器人回复
+      change_group_card: true       # 是否修改群员群名片 :: 绑定ID时自动修改群名片为游戏名
+
+  minecraft: # Minecraft连接器
+    source_name: "Minecraft" # 服务器显示名称 :: 如果是主服务器，会显示这个名称
+    enable: true # 是否启用
+    enable_receive: true # 是否接收转发 :: 其他 connector 的 echo 转发时不转发到此 connector
+    enable_send: true # 是否发送 :: 广播时是否向此 connector 发送（在 echo 等逻辑处即不投递）
+
+    native_chat:
+      enable: false # 原生聊天注入 :: 需安装 GuguChat mod（1.21.1 NeoForge）；开启后QQ→MC消息以绑定玩家名+原版聊天样式注入聊天框，兼容 AtomChat 等聊天框mod
+      show_group_prefix: true # 群名前缀 :: 注入消息前显示 [群名] 前缀
+
+    mc_achievement: true     # 转发 MC 成就
+    mc_death: true     # 转发 MC 死亡消息
+
+    player_join_notice: true     # 玩家加入通知
+    player_left_notice: true     # 玩家离开通知
+    bot_join_notice: true     # 机器人加入通知
+    bot_left_notice: true     # 机器人离开通知
+    player_notice_cooldown: 0   # 进出通知冷却（秒）:: 0 为立即通知；大于 0 时首次加入仍立即通知，离开延迟该秒数后再发，期间重进不通知
+
+    server_start_notice: true     # 服务器启动通知
+    server_stop_notice: true     # 服务器停止通知
+
+    chat_image: false     # 使用 ChatImage 显示图片
+    image_previewer: false     # 使用 ImagePreview 显示图片
+
+    player_join_patterns: # 玩家加入消息的正则表达式模式（第一个捕获组为玩家名）
+      # - "([^\\[]+)\\[.*?\\] logged in with entity id"  # 标准格式：PlayerName[/IP] logged in with entity id
+      - "([^\\s]+) joined the game"                     # 简单格式：PlayerName joined the game
+
+    player_left_patterns: # 玩家离开消息的正则表达式模式（第一个捕获组为玩家名）
+      - "([^\\[]+)\\[.*?\\] left the game"             # 标准格式：PlayerName[/IP] left the game
+      - "([^\\s]+) left the game"                       # 简单格式：PlayerName left the game
+
+    bot_names_pattern: # 机器人名称模式列表（支持正则表达式，玩家通知时会忽略匹配的玩家）
+      - ".*bot.*"            # 包含 "bot" 的玩家名
+      - "^[A-Za-z]+Bot$"     # 以任意字母开头，以 "Bot" 结尾的玩家名
+
+    ignore_mc_command_patterns:
+      - "!!.*" # 忽略MCDR指令
+      - ".*?\\[Command: /.*\\]" # carpet 指令记录
+      - ".*?xaero-waypoint:.*" # 忽略 Xaero Waypoint 的共享
+
+  minecraft_bridge: # Minecraft桥接器
+    source_name: "Main" # 桥接服务器显示名称 :: 如果不是主服务器，会显示这个名称
+    enable: true # 是否启用
+    enable_receive: true # 是否接收转发 :: 其他 connector 的 echo 转发时不转发到此 connector
+    enable_send: true # 是否发送 :: 广播时是否向此 connector 发送（在 echo 等逻辑处即不投递）
+
+    is_main_server: true     # 是否为主服务器 :: 发送消息到其他服务器
+    show_in_game: true     # 游戏内显示其他服务器消息 :: 关闭后来自其他服务器的消息不会在MC游戏内聊天中显示，但仍会转发到QQ等其他平台
+
+    connection: # 桥接服务器连接设置
+      host: 127.0.0.1 # 主机地址
+      port: 8787 # 端口
+      use_ssl: false # 是否使用SSL
+      verify: true # 是否验证证书
+      ca_certs: "" # 证书路径
+      sslopt: { } # SSL选项
+      reconnect: 5 # 重连时间（秒）
+      ping_interval: 5 # 心跳间隔时间（秒）:: 定期发送心跳包检测连接状态
+      ping_timeout: 4 # 心跳超时时间（秒）:: 心跳无响应后判定断线
+      max_wait_time: 5 # 最大等待时间
+      token: "" # 令牌
+
+########################### 风格设置 ##################################
+
+style:
+  current_style: 正常   # 机器人回复风格 :: （可选） #风格 查看风格帮助
+  style_cooldown: 0   # 风格切换冷却
+
+########################### 系统设置 ##################################
+
+system:
+  ban_words: # 违禁词撤回
+    enable: false
+
+  bound: # 绑定系统
+    enable: false
+
+    max_bedrock_bound: 1
+    max_java_bound: 1
+
+    whitelist_add_with_bound: false   # 绑定ID自动绑定服务器白名单
+    whitelist_remove_with_leave: true   # 退群时移除白名单
+
+    player_name_pattern: ""   # 玩家名正则表达式 :: 限制绑定的玩家名格式，为空则不限制
+    # 示例: "^[a-zA-Z0-9_]{3,16}$" (3-16位字母数字下划线)
+    bedrock_player_name_pattern: ""   # 基岩版玩家名正则表达式 :: 优先于 player_name_pattern，为空则回退到 player_name_pattern
+    # 示例: "^[a-zA-Z0-9_ ]{3,16}$" (基岩版允许空格)
+
+  bound_notice: # 绑定提示
+    enable: false
+    exclude_ids: # 排除用户列表（这些用户的消息会被完全忽略，不会被任何系统处理）
+      - 2854196310 # Q群管家
+      - # QQ号2
+
+  echo: # 转发系统
+    enable: true
+
+  cross_broadcast: # 跨平台强制广播 :: QQ发 #mc 仅到MC，MC发 !!qq 仅到QQ（突破 enable_send 限制）
+    enable: true
+    mc_command: "mc"    # QQ 端命令：{command_prefix}{mc_command} 消息
+    qq_command: "!!qq"  # MC 端命令：{qq_command} 消息
+    qq_forward_group_ids: # !!qq 转发目标群号 :: 留空则使用 QQ connector 的 forward_group_ids/group_ids
+      -
+
+  execute: # 命令执行系统
+    enable: false
+    allow_bridge_execute: true   # 是否允许通过 bridge 执行命令
+    ignore_execute_command_patterns: # 忽略的命令模式列表（使用正则表达式）
+      - ".*?give.*?" # 忽略 give 指令，为空则不忽略任何指令
+
+  key_words: # 关键词回复
+    enable: true
+    admin_only: false   # 仅管理员可用 :: 开启后只有管理员才能触发关键词命令
+    forward_to_other_connector: true   # 转发到其他连接器 :: 关闭后触发关键词时仅回复，不转发源消息和回复到其他连接器
+    max_add_time: 30 # 最大添加时间(秒) :: 超过这个时间后，关键词添加会过期
+    cache_image: false # 缓存图片到本地 :: 避免QQ图片链接过期导致关键词回复图片失效
+
+  list: # 在线玩家查询
+    enable: false
+    merge_bridge_results: true   # 合并多服务器结果 :: 将所有服务器的玩家列表合并成一条消息发送
+    bridge_timeout: 3   # 等待其他服务器响应的超时时间（秒）
+    colon_separator: ":" # 列分隔符
+    comma_separator: "," # 列分隔符
+    use_bot_list: false   # 使用 /bot list 获取假人列表 :: leaves/lophine 端需要开启此选项
+    bot_list_pattern: "\\):\\s*(.+)"   # /bot list 每行的正则匹配模式 :: 第一个捕获组为逗号分隔的假人名列表，不匹配的行会被跳过
+    use_query_protocol: false   # 使用 Query 协议查询玩家列表 :: 绕过 RCON 1024 字节限制，自动从 server.properties 读取端口并且 enable-query=true
+    disable_player_ip_logger: false   # 禁用 player_ip_logger 插件辅助识别假人 :: 开启后将跳过 player_ip_logger 的玩家判断
+
+  tps: # 服务器 TPS / MSPT 查询
+    enable: true
+    merge_bridge_results: true   # 合并多服务器结果 :: 将所有服务器的 TPS 合并成一条消息发送
+    bridge_timeout: 3   # 等待其他服务器响应的超时时间（秒）
+
+  name: # 机器人昵称
+    enable: false
+
+  start_command: # 开服指令
+    enable: false
+
+  startup_command: # 启动指令
+    enable: false
+
+  whitelist: # 白名单
+    enable: false
+
+  unbound_check: # 未绑定用户检查
+    enable: false
+    timeout_days: 7   # 入群后未绑定的超时时间（天）
+    check_interval: 86400   # 定时检查间隔（秒，默认24小时）
+    notify_targets: # 通知目标配置
+      admin_private: true   # 私聊管理员
+      admin_groups: true   # 发送到管理群
+      origin_group: false   # 发送到原群
+
+  inactive_check: # 不活跃玩家检查
+    enable: false
+    inactive_days: 30   # 进过游戏但不活跃的天数阈值（天）
+    never_played_days: 7   # 进群后从未进入游戏的天数阈值（天）
+    check_interval: 86400   # 定时检查间隔（秒，默认24小时）
+    auto_fix_card: true   # 自动修正群名片为第一个Java或基岩版游戏名
+    notify_targets: # 通知目标配置
+      admin_private: true   # 私聊管理员
+      admin_groups: true   # 发送到管理群
+      origin_group: false   # 发送到原群
+
+  vote:
+    enable: false   # 是否启用投票系统
+
+    # 全局投票配置
+    keywords: # 全局投票关键词（适用于所有投票类型）
+      yes: # 投赞成票的关键词（精确匹配）
+        - "111"
+        - "同意"
+        - "赞成"
+        - "yes"
+      no: # 投反对票的关键词（精确匹配）
+        - "222"
+        - "反对"
+        - "拒绝"
+        - "no"
+      delete: # 删除投票的关键词（仅管理员可用，用于删除整个投票，精确匹配）
+        - "删除投票"
+        - "delete_vote"
+      abstain: # 弃票的关键词（所有用户可用，用于撤回自己的投票）
+        - "弃票"
+        - "撤回"
+        - "取消投票"
+        - "撤回"
+        - "abstain"
+        - "withdraw"
+
+
+    # 关闭服务器投票配置
+    shutdown:
+      enable: false   # 是否启用关服投票类型
+      required_percentage: 1.0   # 通过所需的同意百分比（0.0-1.0，1.0表示100%）
+      timeout: 300   # 投票超时时间（秒，默认300秒即5分钟）
+      countdown: 10   # 关闭服务器倒计时（秒，默认10秒）
+      extra_countdown: 0   # 额外倒计时（秒，默认0秒，当服务器中有其他不具有投票资格的玩家或存在其他投票议程时，所赋予准备的额外时间）
+      keywords: # 关闭服务器投票的触发关键词
+        start: # 开始投票的关键词（发起人自动投赞成票）（精确匹配）
+          - "关服"
+          - "关闭服务器"
+          - "shutdown"
+        consult: # 征求模式关键词（发起人不自动投票）（模糊匹配）
+          - "坏了坏了"
+          - "要不要关服"
+

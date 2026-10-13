@@ -1,0 +1,19 @@
+{
+	"id": "gugubot",
+	"version": "2.2.5",
+	"name": "GUGUbot",
+	"description": {
+		"en_us": "A QQ bot connect MC and QQ (supports QQ official open-platform native WebSocket)",
+		"zh_cn": "一个QQ和MC互通的机器人（支持离线服务器；新增QQ官方开放平台原生WS直连）"
+	},
+	"author": [
+		"XueK__",
+		"LoosePrince"
+	],
+	"link": "https://github.com/PFingan-Code/PF-GUGUBot",
+	"dependencies": {
+		"whitelist_api": ">=1.3.0",
+		"mg_events": ">=0.2.3",
+		"player_ip_logger": ">=1.1.0"
+	}
+}

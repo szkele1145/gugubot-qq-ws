@@ -1,0 +1,60 @@
+plugins {
+    id 'java'
+    id 'net.neoforged.moddev' version '2.0.78'  // 与本地缓存中 NFRT 1.0.13 + jst 1.0.66 工具链对齐
+}
+
+version = '1.0.0'
+group = 'com.gugubot.chatmod'
+
+base {
+    archivesName = 'guguchat'
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+// 使用本地 JDK 21（Foojay resolver 不联网也能用）
+java.toolchain.languageVersion = JavaLanguageVersion.of(21)
+
+repositories {
+    mavenCentral()
+    maven { url = 'https://maven.neoforged.net/releases' }
+}
+
+neoForge {
+    version = '21.1.248'  // NeoForge for MC 1.21.1（与本地 gradle 缓存中已下载的工件对齐，避免 maven.neoforged.net 直连失败）
+
+    // 无需 access transformer、无需 runs（纯服务端逻辑，不跑 dev 环境）
+    accessTransformers = []
+
+    runs {
+        configureEach {
+            gameDirectory = file('run')
+        }
+    }
+
+    mods {
+        guguchat {
+            sourceSet(sourceSets.main)
+        }
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.release = 21
+}
+
+jar {
+    manifest {
+        attributes [
+            'Specification-Title'   : 'guguchat',
+            'Specification-Version': '1.0',
+            'Implementation-Title' : 'GuguChatMod',
+            'Implementation-Version': '1.0.0',
+        ]
+    }
+}

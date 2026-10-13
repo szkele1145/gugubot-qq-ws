@@ -1,0 +1,311 @@
+# -*- coding: utf-8 -*-
+# +---------------------------------------------------------------------+
+from pathlib import Path
+
+from mcdreforged.api.types import Info, PluginServerInterface
+
+from gugubot.api import GUGUBotAPI, REGISTER_EVENT
+from gugubot.config import BotConfig
+from gugubot.connector import (
+    BridgeConnector,
+    ConnectorManager,
+    MCConnector,
+    QQOfficialConnector,
+    QQWebSocketConnector,
+    TestConnector,
+)
+from gugubot.logic.plugins import (
+    ActiveWhiteListSystem,
+    CrossBroadcastSystem,
+    InactiveCheckSystem,
+    UnboundCheckSystem,
+)
+from gugubot.logic.plugins import broadcast_server_start, broadcast_server_stop
+from gugubot.logic.plugins.mg_event import create_on_mc_achievement, create_on_mc_death
+from gugubot.logic.plugins.player_notice import (
+    cancel_all_pending_notices,
+    create_on_player_join,
+    create_on_player_left,
+)
+from gugubot.logic.system import (
+    BanWordSystem,
+    BoundNoticeSystem,
+    BoundSystem,
+    EchoSystem,
+    ExecuteSystem,
+    GeneralHelpSystem,
+    KeyWordSystem,
+    PlayerListSystem,
+    PluginCommandSystem,
+    StartupCommandSystem,
+    StyleSystem,
+    SystemManager,
+    TodoSystem,
+    TpsSystem,
+    VoteSystem,
+    WhitelistSystem,
+)
+from gugubot.utils import (
+    StyleManager,
+    check_plugin_version,
+    help_msg_register,
+    migrate_config_v1_to_v2,
+)
+from gugubot.webui_register import register_gugubot_webui_page
+
+connector_manager: ConnectorManager = None
+mc_connector: MCConnector = None
+gugubot_config: BotConfig = None
+api: GUGUBotAPI = None
+startup_command_system: StartupCommandSystem = None
+style_manager: StyleManager = None
+unbound_check_system: UnboundCheckSystem = None
+inactive_check_system: InactiveCheckSystem = None
+vote_system: VoteSystem = None
+
+
+# +---------------------------------------------------------------------+
+async def on_load(server: PluginServerInterface, _) -> None:
+    global connector_manager
+    global mc_connector
+    global gugubot_config
+    global api
+    global startup_command_system
+    global style_manager
+    global unbound_check_system
+    global inactive_check_system
+    global vote_system
+
+    # 尝试迁移旧版本配置
+    config_path = Path(server.get_data_folder()) / "config.yml"
+    if config_path.exists():
+        try:
+            with server.open_bundled_file(
+                "gugubot/config/defaults/default_config.yml"
+            ) as file_handler:
+                default_config_content = file_handler.read().decode("utf-8")
+            migrate_config_v1_to_v2(
+                config_path, default_config_content, logger=server.logger
+            )
+        except Exception as e:
+            server.logger.error(f"迁移配置失败: {e}")
+
+    gugubot_config = BotConfig(config_path)
+    gugubot_config.add_new_config(server)
+
+    is_main_server = gugubot_config.get_keys(
+        ["connector", "minecraft_bridge", "is_main_server"], True
+    )
+
+    connector_manager = ConnectorManager(server, gugubot_config)
+
+    mc_connector = MCConnector(server, gugubot_config)
+    connectors = [
+        mc_connector,
+        TestConnector(server, gugubot_config),
+        BridgeConnector(server, gugubot_config),
+    ]
+
+    if is_main_server:
+        # 按 connection.type 选择 QQ 连接器：
+        #   - "official"（QQ 官方开放平台 WS 直连，appid+secret 鉴权）
+        #   - 其他/未设置 → 原 OneBot v11 反向 WS（NapCat/Lagrange 等）
+        qq_connection_type = gugubot_config.get_keys(
+            ["connector", "QQ", "connection", "type"], "onebot"
+        )
+        if str(qq_connection_type).lower() == "official":
+            connectors.append(QQOfficialConnector(server, gugubot_config))
+        else:
+            connectors.append(QQWebSocketConnector(server, gugubot_config))
+
+    for connector in connectors:
+        await connector_manager.register_connector(connector)
+
+    # 初始化风格管理器
+    style_manager = StyleManager(server, gugubot_config)
+    style_manager.scan_styles()
+
+    # 注册系统管理器
+    system_manager = SystemManager(
+        server, connector_manager=connector_manager, config=gugubot_config
+    )
+    system_manager.style_manager = style_manager
+
+    # 创建系统实例，enable状态在各系统__init__中从config自动读取
+    systems = [EchoSystem(enable=True, config=gugubot_config)]
+
+    # Execute 系统在所有服务器上都需要创建，以便处理从 bridge 收到的命令
+    execute_system = ExecuteSystem(server, config=gugubot_config)
+    systems.insert(0, execute_system)
+
+    # PlayerList 系统 (需要在所有服务器上运行)
+    player_list_system = PlayerListSystem(server, config=gugubot_config)
+    systems.insert(1, player_list_system)
+
+    # TPS / MSPT 查询 (需要在所有服务器上运行，以便 Bridge 汇总)
+    tps_system = TpsSystem(server, config=gugubot_config)
+    systems.insert(2, tps_system)
+
+    if is_main_server:
+        general_help_system = GeneralHelpSystem(server, config=gugubot_config)
+        ban_word_system = BanWordSystem(server, config=gugubot_config)
+        key_word_system = KeyWordSystem(server, config=gugubot_config)
+        whitelist_system = WhitelistSystem(server, config=gugubot_config)
+        bound_system = BoundSystem(server, config=gugubot_config)
+        bound_notice_system = BoundNoticeSystem(config=gugubot_config)
+        startup_command_system = StartupCommandSystem(server, config=gugubot_config)
+        style_system = StyleSystem(server, style_manager, config=gugubot_config)
+        todo_system = TodoSystem(server, config=gugubot_config)
+        vote_system = VoteSystem(server, config=gugubot_config)
+
+        # 创建活跃白名单系统
+        active_whitelist_system = ActiveWhiteListSystem(server, config=gugubot_config)
+
+        # 创建未绑定检查系统
+        unbound_check_system = UnboundCheckSystem(server, config=gugubot_config)
+
+        # 创建不活跃检查系统
+        inactive_check_system = InactiveCheckSystem(server, config=gugubot_config)
+
+        # 设置白名单系统引用
+        bound_system.set_whitelist_system(whitelist_system)
+        # 设置绑定提醒系统对绑定系统的引用
+        bound_notice_system.set_bound_system(bound_system)
+        # 设置未绑定检查系统的依赖
+        unbound_check_system.set_bound_system(bound_system)
+        # 设置不活跃检查系统的依赖
+        inactive_check_system.set_bound_system(bound_system)
+        inactive_check_system.set_whitelist_system(whitelist_system)
+        inactive_check_system.set_active_whitelist_system(active_whitelist_system)
+
+
+        systems.insert(0, general_help_system)
+        systems.insert(1, ban_word_system)
+        systems.insert(2, bound_system)
+        systems.insert(3, bound_notice_system)
+        systems.insert(1, key_word_system)
+        systems.insert(5, whitelist_system)
+        systems.insert(6, startup_command_system)
+        systems.insert(7, style_system)
+        systems.insert(8, todo_system)
+        systems.insert(9, unbound_check_system)
+        systems.insert(10, inactive_check_system)
+        systems.insert(11, active_whitelist_system)
+        systems.insert(12, vote_system)
+
+    # 跨平台强制广播（#mc / !!qq），放在 echo 前以便处理后可拦截不再走 echo）
+    cross_broadcast_system = CrossBroadcastSystem(config=gugubot_config)
+    systems.insert(len(systems) - 1, cross_broadcast_system)
+
+    api = GUGUBotAPI(server, gugubot_config)
+    plugin_command_system = PluginCommandSystem(server, api, config=gugubot_config)
+    systems.insert(len(systems) - 1, plugin_command_system)
+
+    for system in systems:
+        system_manager.register_system(system)
+
+    connector_manager.register_system_manager(system_manager)
+
+    # 为未绑定检查系统设置 QQ 连接器（仅在主服务器）
+    if is_main_server:
+        qq_connector = connector_manager.get_connector("QQ")
+        if qq_connector:
+            unbound_check_system.set_qq_connector(qq_connector)
+            inactive_check_system.set_qq_connector(qq_connector)
+
+    # 检查插件版本
+    server.schedule_task(check_plugin_version(server))
+
+    # 注册帮助消息
+    command_prefix = gugubot_config.get_keys(["GUGUBot", "command_prefix"], "#")
+    help_name = server.tr("gugubot.system.general_help.name")
+    main_help_msg = f"GUGUBot {help_name}"
+    server.register_help_message(f"{command_prefix}{help_name}", main_help_msg)
+
+    # 注册 !!gugubot 命令
+    help_msg_register(server, gugubot_config)
+
+    # PF-MCDR-WebUI：侧边栏「插件网页」与 /api/plugin/gugubot/...
+    register_gugubot_webui_page(server, gugubot_config, connector_manager)
+
+    # # 注册监听任务
+    server.register_event_listener(
+        "PlayerAdvancementEvent",
+        create_on_mc_achievement(gugubot_config, connector_manager),
+    )
+    server.register_event_listener(
+        "PlayerDeathEvent", create_on_mc_death(gugubot_config, connector_manager)
+    )
+
+    server.dispatch_event(REGISTER_EVENT, (api,))
+
+
+# +---------------------------------------------------------------------+
+# # 防止初始化报错
+# qq_bot = None
+
+
+async def on_info(server: PluginServerInterface, info: Info) -> None:
+    if connector_manager is not None:
+        on_player_join = create_on_player_join(connector_manager, gugubot_config)
+        on_player_left = create_on_player_left(connector_manager, gugubot_config)
+        await on_player_join(server, info)
+        await on_player_left(server, info)
+
+
+async def on_user_info(server: PluginServerInterface, info: Info) -> None:
+    if mc_connector is not None:
+        await mc_connector.on_message(info)
+
+
+# 卸载
+async def on_unload(_: PluginServerInterface) -> None:
+    global api
+    cancel_all_pending_notices()
+    if api is not None:
+        api.clear()
+        api = None
+    try:
+        # 停止未绑定检查定时任务
+        if unbound_check_system:
+            unbound_check_system.stop_schedule_task()
+
+        # 停止不活跃检查定时任务
+        if inactive_check_system:
+            inactive_check_system.stop_schedule_task()
+
+        if connector_manager:
+            await connector_manager.disconnect_all()
+    except:
+        pass
+
+
+# +---------------------------------------------------------------------+
+# 服务器启动和停止通知
+
+
+
+async def on_server_startup(server: PluginServerInterface) -> None:
+    """服务器启动时的回调函数。"""
+    try:
+        if startup_command_system:
+            await startup_command_system.execute_all_commands()
+
+        if connector_manager:
+            # 广播服务器启动消息
+            await broadcast_server_start(server, connector_manager, gugubot_config)
+    except Exception as e:
+        server.logger.error(f"[GUGUBot] 服务器启动通知失败: {e}")
+
+
+async def on_server_stop(server: PluginServerInterface, _: int) -> None:
+    """服务器停止时的回调函数。"""
+    try:
+        if connector_manager:
+            # 广播服务器停止消息
+            await broadcast_server_stop(server, connector_manager, gugubot_config)
+    except Exception as e:
+        server.logger.error(f"[GUGUBot] 服务器停止通知失败: {e}")
+
+
+# +---------------------------------------------------------------------+
