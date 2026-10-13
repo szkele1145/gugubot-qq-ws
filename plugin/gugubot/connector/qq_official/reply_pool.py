@@ -22,8 +22,9 @@ import time
 from collections import OrderedDict
 from typing import Optional, Tuple
 
-# 每个群池子最多保留的 msg_id 数（防止内存膨胀）
-_POOL_LIMIT = 64
+# 每个群池子最多保留的 msg_id 数（防内存膨胀；活跃群 5 分钟窗口内
+# 64 条不够用——每条可回 5 次，256 条 x 5 次 = 1280 次被动额度足够）
+_POOL_LIMIT = 256
 # 单个 msg_id 官方最多允许回复 5 次（msg_seq 0-4）
 _MAX_SEQ = 5
 # msg_id 有效期（官方约 5 分钟，提前 30s 弃用）
