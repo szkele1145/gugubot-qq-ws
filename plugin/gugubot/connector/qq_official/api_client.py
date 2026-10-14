@@ -75,15 +75,32 @@ class QQOfficialClient:
         payload: Optional[dict] = None,
         params: Optional[dict] = None,
         retry_on_auth: bool = True,
+        _net_attempt: int = 0,
     ) -> Dict[str, Any]:
-        resp = requests.request(
-            method,
-            _API_BASE + path,
-            json=payload,
-            params=params,
-            headers=self._headers(),
-            timeout=15,
-        )
+        """REST 请求。
+
+        - 401/403：token 失效自动刷新重试一次
+        - 网络异常（超时/连接失败）：短暂退避重试一次（幂等的读操作
+          与消息发送均安全——官方按 msg_id+msg_seq 去重）
+        """
+        try:
+            resp = requests.request(
+                method,
+                _API_BASE + path,
+                json=payload,
+                params=params,
+                headers=self._headers(),
+                timeout=15,
+            )
+        except requests.RequestException as e:
+            if _net_attempt < 1:
+                import time as _t
+                _t.sleep(1)
+                return self._request(
+                    method, path, payload, params,
+                    retry_on_auth=retry_on_auth, _net_attempt=_net_attempt + 1,
+                )
+            raise QQOfficialAPIError(0, 0, f"网络异常: {e}") from e
 
         # token 失效自动重试一次
         if resp.status_code in (401, 403) and retry_on_auth:
@@ -155,16 +172,15 @@ class QQOfficialClient:
         file_type: 1=图片 2=视频 3=语音；url 需为公网可访问地址。
         """
         info = self.upload_group_media(group_openid, file_type, url, srv=srv)
-        if not isinstance(info, dict) or "file_info" in info:
-            # upload_group_media 已返回 file_info 字段
-            file_info = info.get("file_info") if isinstance(info, dict) else None
-            if file_info is None:
-                raise QQOfficialAPIError(
-                    500, 500, f"富媒体上传返回异常: {info!r}"
-                )
-            media = {"file_info": file_info}
-        else:
-            media = {"file_info": info}
+        # 上传返回体形如 {"file_info": "...", ...}；兼容直接给 file_info 的返回
+        file_info = None
+        if isinstance(info, dict):
+            file_info = info.get("file_info") or (
+                info if set(info.keys()) <= {"file_info"} else None
+            )
+        if not file_info:
+            raise QQOfficialAPIError(500, 500, f"富媒体上传返回异常: {info!r}")
+        media = {"file_info": file_info}
 
         if msg_id is None:
             taken = self._pool.take(group_openid)
