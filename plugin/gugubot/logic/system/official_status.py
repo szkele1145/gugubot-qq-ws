@@ -106,8 +106,20 @@ class OfficialStatusSystem(BasicSystem):
         try:
             pool = getattr(connector, "reply_pool", None)
             if pool:
-                total = sum(pool.size(k) for k in _known_group_keys(connector))
+                keys = _known_group_keys(connector)
+                total = sum(pool.size(k) for k in keys)
                 lines.append(f"被动回复池: {total} 条 msg_id 待用")
+                # event_id 备用通道余量（有 event_id 的待用条数）
+                ev_total = 0
+                try:
+                    for k in keys:
+                        for info in (getattr(pool, "_pools", {}).get(k) or {}).values():
+                            if info.get("event_id"):
+                                ev_total += 1
+                except Exception:
+                    pass
+                if ev_total:
+                    lines.append(f"  备用 event_id 通道: {ev_total} 条")
         except Exception:
             pass
 
