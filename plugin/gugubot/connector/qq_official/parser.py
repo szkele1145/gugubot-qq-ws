@@ -268,9 +268,38 @@ class QQOfficialParser(BasicParser):
 
         legacy_user = id_mapper.to_legacy_user(user_openid)
         content = (data.get("content", "") or "").strip()
-        content = _clean_official_content(content).strip()
 
-        segments = self._build_segments(content, data.get("attachments"))
+        # 机器人消息过滤（与群消息一致：author.bot 拦截防回声）
+        author = data.get("author", {}) or {}
+        username = (author.get("username", "") or "").strip()
+        if author.get("bot", False):
+            self.logger.debug(f"[QQ官方] 拦截机器人单聊消息（{username}），不转发")
+            return None
+
+        # @标记原位展开为 at 段（与群消息一致）
+        bot_official_id = str(getattr(self.connector.bot, "self_id", "") or "")
+        segments = self._build_segments("", data.get("attachments"))
+        text_parts = []
+        pos = 0
+        for m in _AT_USER_PATTERN.finditer(content):
+            if m.start() > pos:
+                text_parts.append(("text", content[pos:m.start()]))
+            openid = m.group(1)
+            if not (bot_official_id and openid == bot_official_id):
+                text_parts.append(("at", openid))
+            pos = m.end()
+        if pos < len(content):
+            text_parts.append(("text", content[pos:]))
+        for kind, value in text_parts:
+            if kind == "text":
+                cleaned = _clean_official_content(value).strip()
+                if cleaned:
+                    segments.append({"type": "text", "data": {"text": cleaned}})
+            else:
+                segments.append({
+                    "type": "at",
+                    "data": {"qq": id_mapper.to_legacy_user(value), "name": ""},
+                })
 
         if await self._should_exclude_user(legacy_user):
             return None
@@ -278,8 +307,9 @@ class QQOfficialParser(BasicParser):
         # 官方单聊默认不放开权限（无 friend_is_admin 概念），保持与管理员列表匹配
         is_admin = self._is_admin(legacy_user)
 
-        # 显示名：官方下发真实昵称（新平台能力），没有则回退虚拟号
-        username = ((data.get("author", {}) or {}).get("username", "") or "").strip()
+        # 空消息保底
+        if not segments:
+            return None
 
         return BroadcastInfo(
             event_type="message",
