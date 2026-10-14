@@ -303,14 +303,21 @@ class QQOfficialConnector(BasicConnector):
         admin_groups = config.get_keys(
             ["connector", "QQ", "permissions", "admin_group_ids"], []
         )
+        notice_groups = config.get_keys(
+            ["connector", "QQ", "permissions", "notice_forward_groups"], []
+        )
         if self.logger:
             self.logger.info(
                 f"{self.log_prefix} 监听配置读取结果：group_ids={group_ids!r} "
-                f"forward_group_ids={forward_ids!r} admin_group_ids={admin_groups!r}"
+                f"forward_group_ids={forward_ids!r} admin_group_ids={admin_groups!r} "
+                f"notice_forward_groups={notice_groups!r}"
                 + ("（提示：均为空 = 宽松模式监听所有已绑定群）"
-                   if not any([group_ids, forward_ids, admin_groups]) else "")
+                   if not any([group_ids, forward_ids, admin_groups, notice_groups]) else "")
             )
-        self.id_mapper.register_legacy_groups(group_ids + forward_ids + admin_groups)
+        # 通知群也进绑定槽位（启动/关服通知需要向 notice_forward_groups 发送）
+        self.id_mapper.register_legacy_groups(
+            group_ids + forward_ids + admin_groups + notice_groups
+        )
 
         # intents
         self._intents = self._build_intents(config)
