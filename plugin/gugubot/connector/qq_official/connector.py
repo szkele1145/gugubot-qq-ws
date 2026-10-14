@@ -433,7 +433,8 @@ class QQOfficialConnector(BasicConnector):
         """on_message 是 BasicConnector 的抽象接口；事件入口在 _on_ws_dispatch。"""
         if isinstance(raw, dict) and "_event_name" in raw:
             self._on_ws_dispatch(
-                raw["_event_name"], raw.get("seq", 0), raw.get("_data", raw)
+                raw["_event_name"], raw.get("seq", 0), raw.get("_data", raw),
+                raw.get("_event_id", ""),
             )
 
     async def send_message(self, processed_info: ProcessedInfo) -> None:
