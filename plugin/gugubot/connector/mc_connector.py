@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """Connector for a Minecraft server via MCDR."""
 
 import logging
