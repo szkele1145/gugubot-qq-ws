@@ -1,4 +1,4 @@
-﻿import sys, types, json, threading, time
+import sys, types, json, threading, time
 
 # ===== stub mcdreforged =====
 class _Any:
@@ -113,6 +113,9 @@ cfg["connector"] = {"QQ": {"permissions": {
     "admin_group_ids": [],
 }}}
 
+class _FakeBot:
+    self_id = "BOT_TEST_ID"
+
 class FakeConnector:
     def __init__(self):
         self.config = cfg
@@ -120,6 +123,7 @@ class FakeConnector:
         self.logger = FakeLogger()
         self.id_mapper = mapper
         self.reply_pool = pool
+        self.bot = _FakeBot()
 
 class FakeServer: pass
 

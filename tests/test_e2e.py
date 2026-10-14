@@ -104,6 +104,9 @@ cfg["connector"] = {
 class FakeServer:
     def get_data_folder(self): return str(data_dir)
 
+class _FakeBot:
+    self_id = "BOT_E2E_ID"
+
 class FakeConnector:
     def __init__(self):
         self.config = cfg
@@ -112,6 +115,7 @@ class FakeConnector:
         self.server = FakeServer()
         self.id_mapper = QQIDMapper(data_file=data_dir / "ids.json")
         self.reply_pool = QQReplyPool()
+        self.bot = _FakeBot()
         # 真实流程：connector.__init__ 会登记配置群号
         self.id_mapper.register_legacy_groups(["987654"])
 

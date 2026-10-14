@@ -31,8 +31,10 @@ from typing import Optional
 from gugubot.parser.basic_parser import BasicParser
 from gugubot.utils.types import BroadcastInfo, Source
 
-# <@!xxxx> 官方 at 机器人标记
-_AT_BOT_PATTERN = re.compile(r"<@!\s*[A-Za-z0-9_-]+\s*>")
+# <@!xxxx> 官方 at 用户/机器人标记（捕获 openid）
+_AT_USER_PATTERN = re.compile(r"<@!\s*([A-Za-z0-9_-]+)\s*>")
+# 兼容旧名
+_AT_BOT_PATTERN = _AT_USER_PATTERN
 # <faceType=...,faceId=...,ext=...> QQ 原生小表情标记（清理为空，避免乱码文本）
 _FACE_PATTERN = re.compile(r"<faceType=\d+[^>]*>")
 # 保留 [CICode,...]] 图片标签（AtomChat/ChatImage 识别）
@@ -40,7 +42,7 @@ _FACE_PATTERN = re.compile(r"<faceType=\d+[^>]*>")
 
 def _clean_official_content(text: str) -> str:
     """清理官方消息 content 里的平台标记（@机器人、face 表情）。"""
-    text = _AT_BOT_PATTERN.sub("", text)
+    text = _AT_USER_PATTERN.sub("", text)
     text = _FACE_PATTERN.sub("", text)
     return text
 
@@ -156,17 +158,47 @@ class QQOfficialParser(BasicParser):
         legacy_user = id_mapper.to_legacy_user(member_openid)
 
         content = data.get("content", "") or ""
-        # 清理 @机器人 / face 表情等平台标记
-        content = _clean_official_content(content).strip()
 
         # 富媒体附件 → image/record/video 段
-        segments = self._build_segments(content, data.get("attachments"))
+        segments = self._build_segments("", data.get("attachments"))
 
-        # mentions（@了谁）→ at 段；openid 转虚拟号保证下游绑定名渲染一致
-        for seg in self._mentions_to_segments(data.get("mentions")):
-            openid = seg["data"]["qq"]
-            seg["data"]["qq"] = id_mapper.to_legacy_user(openid) if openid else seg["data"]["name"]
-            segments.append(seg)
+        # @用户标记原位展开为 at 段（保留消息中的位置语义）；
+        # @机器人自身的标记剔除。mentions 提供用户名映射。
+        bot_official_id = str(getattr(self.connector.bot, "self_id", "") or "")
+        mention_names = {
+            str(m.get("id", "")): (m.get("username", "") or "").strip()
+            for m in (data.get("mentions") or [])
+            if isinstance(m, dict) and m.get("id")
+        }
+        text_parts = []  # (kind, value)：kind ∈ {"text", "at"}
+        pos = 0
+        for m in _AT_USER_PATTERN.finditer(content):
+            if m.start() > pos:
+                text_parts.append(("text", content[pos:m.start()]))
+            openid = m.group(1)
+            if bot_official_id and openid == bot_official_id:
+                pass  # @机器人自身：剔除
+            else:
+                text_parts.append(("at", openid))
+            pos = m.end()
+        if pos < len(content):
+            text_parts.append(("text", content[pos:]))
+
+        # 文本/标记流 → 消息段序列（face 表情清理、@人转虚拟号 at 段）
+        for kind, value in text_parts:
+            if kind == "text":
+                cleaned = _clean_official_content(value).strip()
+                if cleaned:
+                    segments.append({"type": "text", "data": {"text": cleaned}})
+            else:
+                name = mention_names.get(value, "")
+                segments.append({
+                    "type": "at",
+                    "data": {
+                        "qq": id_mapper.to_legacy_user(value),
+                        "name": name,
+                    },
+                })
 
         # 显示名：官方下发真实昵称 username（新平台能力）；没有则回退虚拟号
         username = (author.get("username", "") or "").strip()
@@ -196,6 +228,10 @@ class QQOfficialParser(BasicParser):
             return None
 
         self._current_source_id = legacy_group
+
+        # 空消息保底（无文本/附件/@时跳过广播，不产出空段列表）
+        if not segments:
+            return None
 
         return BroadcastInfo(
             event_type="message",
@@ -379,16 +415,15 @@ class QQOfficialParser(BasicParser):
                 segments.append({"type": "record", "data": file_data})
             # 其他附件忽略（官方 file 类型需要额外 file_info 拉取）
 
-        if not segments:
-            segments.append({"type": "text", "data": {"text": ""}})
         return segments
 
     @staticmethod
     def _mentions_to_segments(mentions: Optional[list]) -> list:
         """官方 mentions（@用户列表，含 username/member_openid）→ at 段。
 
-        生成 [{"type":"at","data":{"qq":虚拟号,"name":昵称}}]；下游
-        mc_builder 的 at 处理会用绑定名渲染 @xxx。
+        .. deprecated::
+            保留作兼容参考；群消息的 @ 已改为 content 原位展开
+            （见 ``_parse_group_message``），不再整体追加到尾部。
         """
         result = []
         for m in mentions or []:
