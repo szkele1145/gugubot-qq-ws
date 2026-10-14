@@ -480,6 +480,17 @@ class QQOfficialConnector(BasicConnector):
         )
         message_parts = self._split_message(message, max_length=max_message_length)
 
+        # 节流参数循环外一次读取
+        t_min = float(self.config.get_keys(
+            ["connector", "QQ", "connection", "official", "send_throttle_min"], 0.5
+        ))
+        t_max = float(self.config.get_keys(
+            ["connector", "QQ", "connection", "official", "send_throttle_max"], 1.5
+        ))
+        if t_max < t_min:
+            t_min, t_max = t_max, t_min
+        multi_part_throttle = len(message_parts) > 1
+
         for target_id, target_type in target.items():
             if not target_id:
                 continue
@@ -523,17 +534,9 @@ class QQOfficialConnector(BasicConnector):
                     if self._is_rate_limited(e):
                         break
 
-                # 分片间节流（可配置：send_throttle_min/max 秒，默认 0.5~1.5）
-                if len(message_parts) > 1:
-                    t_min = self.config.get_keys(
-                        ["connector", "QQ", "connection", "official", "send_throttle_min"], 0.5
-                    )
-                    t_max = self.config.get_keys(
-                        ["connector", "QQ", "connection", "official", "send_throttle_max"], 1.5
-                    )
-                    if t_max < t_min:
-                        t_min, t_max = t_max, t_min
-                    await asyncio.sleep(random.uniform(float(t_min), float(t_max)))
+                # 分片间节流（参数循环外已读取）
+                if multi_part_throttle:
+                    await asyncio.sleep(random.uniform(t_min, t_max))
 
     # ------------------------------------------------------------------ #
     # 内部发送
@@ -542,11 +545,12 @@ class QQOfficialConnector(BasicConnector):
     async def _send_group(self, group_openid: str, content: str) -> dict:
         """发群消息；对限频错误做短重试。
 
-        重试时复用第一次取出的 msg_id/msg_seq——不浪费被动回复额度
-        （每次重试重新取池会白白消耗一条 seq）。
+        首次调用**先取池**把 msg_id/msg_seq 显式握在手里再发——重试
+        复用同一额度，绝不重复取池（被动回复额度有限，每条仅 5 次）。
         """
         last_err: Optional[Exception] = None
-        taken = None  # (msg_id, msg_seq)：重试复用，不重复取池
+        # 先取被动额度（msg_id 池 → None 则转主动消息/event_id 通道）
+        taken = self.reply_pool.take(group_openid)
         for attempt in range(3):
             try:
                 if taken:
@@ -567,9 +571,9 @@ class QQOfficialConnector(BasicConnector):
         raise last_err or RuntimeError("未知发送错误")
 
     async def _send_c2c(self, user_openid: str, content: str) -> dict:
-        """发 C2C 消息；限频/网络错误短重试（复用首次取出的被动额度）。"""
+        """发 C2C 消息；限频/网络错误短重试（首取额度后全程复用）。"""
         last_err: Optional[Exception] = None
-        taken = None  # (msg_id, msg_seq)：重试复用，不重复取池
+        taken = self.reply_pool.take(f"c2c:{user_openid}")
         for attempt in range(3):
             try:
                 if taken:
