@@ -540,10 +540,20 @@ class QQOfficialConnector(BasicConnector):
     # ------------------------------------------------------------------ #
 
     async def _send_group(self, group_openid: str, content: str) -> dict:
-        """发群消息；对限频错误做短重试。"""
+        """发群消息；对限频错误做短重试。
+
+        重试时复用第一次取出的 msg_id/msg_seq——不浪费被动回复额度
+        （每次重试重新取池会白白消耗一条 seq）。
+        """
         last_err: Optional[Exception] = None
+        taken = None  # (msg_id, msg_seq)：重试复用，不重复取池
         for attempt in range(3):
             try:
+                if taken:
+                    mid, seq = taken
+                    return self.api_client.send_group_message(
+                        group_openid, content, msg_id=mid, msg_seq=seq
+                    )
                 return self.api_client.send_group_message(group_openid, content)
             except QQOfficialAPIError as e:
                 last_err = e
@@ -557,9 +567,16 @@ class QQOfficialConnector(BasicConnector):
         raise last_err or RuntimeError("未知发送错误")
 
     async def _send_c2c(self, user_openid: str, content: str) -> dict:
+        """发 C2C 消息；限频/网络错误短重试（复用首次取出的被动额度）。"""
         last_err: Optional[Exception] = None
+        taken = None  # (msg_id, msg_seq)：重试复用，不重复取池
         for attempt in range(3):
             try:
+                if taken:
+                    mid, seq = taken
+                    return self.api_client.send_c2c_message(
+                        user_openid, content, msg_id=mid, msg_seq=seq
+                    )
                 return self.api_client.send_c2c_message(user_openid, content)
             except QQOfficialAPIError as e:
                 last_err = e

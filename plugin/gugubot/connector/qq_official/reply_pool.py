@@ -72,21 +72,25 @@ class QQReplyPool:
             if not pool:
                 return None
 
-            keys = list(pool.keys())
-            # 从最新往旧找
-            for msg_id in reversed(keys):
+            # 只读迭代；用尽条目先记后删（避免迭代期变更 OrderedDict）
+            to_drop = []
+            for msg_id in reversed(pool):
                 info = pool[msg_id]
                 if now - info["ts"] > _MSG_TTL:
-                    # 过期：删掉继续找更旧的没有意义，直接清空并退出
-                    del pool[msg_id]
-                    continue
+                    # 新到旧遍历，第一条过期则更旧的必然全过期 → 停止
+                    break
                 if info["seq"] >= _MAX_SEQ:
-                    del pool[msg_id]
-                    continue
+                    to_drop.append(msg_id)
+                    continue  # 继续找次新的
                 seq = info["seq"]
                 info["seq"] = seq + 1
+                for m in to_drop:
+                    del pool[m]
                 return msg_id, seq
 
+            # 未找到可用条目：仍清理本轮发现的用尽项
+            for m in to_drop:
+                pool.pop(m, None)
             return None
 
     def take_event(self, group_openid: str) -> Optional[str]:
@@ -100,11 +104,13 @@ class QQReplyPool:
             pool = self._pools.get(group_openid)
             if not pool:
                 return None
-            for msg_id in reversed(list(pool.keys())):
+            for msg_id in reversed(pool):
                 info = pool[msg_id]
                 eid = info.get("event_id", "")
                 if eid and now - info["ts"] <= _MSG_TTL:
                     return eid
+                if now - info["ts"] > _MSG_TTL:
+                    break  # 新到旧遍历，第一条过期则更旧的必然过期
             return None
 
     def drop(self, group_openid: str, msg_id: str) -> None:
