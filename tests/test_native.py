@@ -114,16 +114,15 @@ asyncio.run(run())
 assert len(EXECUTED) == 1, EXECUTED
 cmd = EXECUTED[0]
 print("CMD:", cmd)
-assert cmd.startswith('guguchat inject "QQ" "[QQ转发]Steve:'), cmd
-# 引号/反斜杠已转义
-assert chr(92) + chr(34) in cmd, cmd  # 引号已转义为 \"
-print("PASS: native_chat 注入命令生成 + [QQ转发]玩家名: 格式 + brigadier 转义")
+# 新格式：guguchat inject "<玩家名>" [QQ转发]玩家名:消息（message 原文、无引号包裹）
+assert cmd.startswith('guguchat inject "Steve" [QQ转发]Steve:'), cmd
+print("PASS: native_chat 注入命令生成 + [QQ转发]玩家名: 格式（message 原文）")
 
 # show_group_prefix=false → 无前缀（纯消息）
 cfg["connector"]["minecraft"]["native_chat"]["show_group_prefix"] = False
 EXECUTED.clear()
 asyncio.run(run())
-assert EXECUTED[0].startswith('guguchat inject "QQ" "[QQ转发]') is False or '"[QQ转发]' not in EXECUTED[0], EXECUTED[0]
+assert "[QQ转发]" not in EXECUTED[0], EXECUTED[0]
 print("PASS: show_group_prefix=false 无前缀")
 
 print()

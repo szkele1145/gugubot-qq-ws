@@ -29,20 +29,22 @@ public class GuguChatCommand {
     public static void register(com.mojang.brigadier.CommandDispatcher<CommandSourceStack> dispatcher) {
         dispatcher.register(LiteralArgumentBuilder.<CommandSourceStack>literal("guguchat")
             .requires(src -> src.hasPermission(2) || src.getTextName().equals("Server"))
-            // ---- inject：<显示名> <消息> ----
-            .then(Commands.argument("display", StringArgumentType.string())
-                .then(Commands.argument("message", StringArgumentType.greedyString())
-                    .executes(ctx -> {
-                        String display = StringArgumentType.getString(ctx, "display");
-                        String message = StringArgumentType.getString(ctx, "message");
-                        int n = ChatInjector.inject(display, message);
-                        if (n == 0) {
-                            ctx.getSource().sendFailure(
-                                Component.literal("GuguChat: 没有在线玩家，消息未投递（此消息不会出现在游戏里）"));
-                            return 0;
-                        }
-                        return com.mojang.brigadier.Command.SINGLE_SUCCESS;
-                    })
+            // ---- inject <显示名> <消息> ----
+            .then(Commands.literal("inject")
+                .then(Commands.argument("display", StringArgumentType.string())
+                    .then(Commands.argument("message", StringArgumentType.greedyString())
+                        .executes(ctx -> {
+                            String display = StringArgumentType.getString(ctx, "display");
+                            String message = StringArgumentType.getString(ctx, "message");
+                            int n = ChatInjector.inject(display, message);
+                            if (n == 0) {
+                                ctx.getSource().sendFailure(
+                                    Component.literal("GuguChat: 没有在线玩家，消息未投递（此消息不会出现在游戏里）"));
+                                return 0;
+                            }
+                            return com.mojang.brigadier.Command.SINGLE_SUCCESS;
+                        })
+                    )
                 )
             )
             // ---- status：运行状态 ----

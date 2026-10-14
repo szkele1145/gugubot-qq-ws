@@ -220,8 +220,11 @@ class MCConnector(BasicConnector):
 
                 # 正文 = [QQ转发]玩家名:消息
                 body = f"[QQ转发]{display_name}:{plain}" if show_prefix else plain
-                body = body.replace(chr(92), chr(92) * 2).replace(chr(34), chr(92) + chr(34))
-                cmd = f'guguchat inject "QQ" "{body}"'
+
+                # 命令格式：guguchat inject "<显示名>" <消息原文>
+                # - display 用引号包裹：brigadier 需要它解析含中文/特殊字符的名字
+                # - message 不加引号不转义：greedyString 原样吃掉行尾全部内容
+                cmd = f'guguchat inject "{display_name}" {body}'
                 try:
                     # 注意：execute() 才是发送到服务器 stdin 的服务端命令；
                     # execute_command() 是 MCDR 自己的 !! 命令系统，走不到 mod
