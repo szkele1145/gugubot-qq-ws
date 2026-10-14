@@ -56,7 +56,7 @@ connector:
       forward_group_ids: # 转发目标群号 :: MC消息转发到这些群（留空则使用group_ids）
         -
 
-      notice_forward_groups: # 通知专用转发群号 :: 服务器开关机、玩家进出、成就/死亡通知转发到这些群（留空则使用forward_group_ids）
+      notice_forward_groups: # 通知专用转发群号 :: 服务器开关机、玩家进出、成就/死亡通知转发到这些群（留空则使用forward_group_ids）:: 官方直连模式下此群需在群内@机器人完成绑定
         -
 
       friend_is_admin: false       # 好友即是管理 :: 开放管理权限给机器人好友
@@ -176,7 +176,7 @@ system:
     enable: true
     mc_command: "mc"    # QQ 端命令：{command_prefix}{mc_command} 消息
     qq_command: "!!qq"  # MC 端命令：{qq_command} 消息
-    qq_forward_group_ids: # !!qq 转发目标群号 :: 留空则使用 QQ connector 的 forward_group_ids/group_ids
+    qq_forward_group_ids: # !!qq 转发目标群号 :: 留空则使用 QQ connector 的 forward_group_ids/group_ids :: 官方直连模式下此群需在群内@机器人完成绑定
       -
 
   execute: # 命令执行系统
