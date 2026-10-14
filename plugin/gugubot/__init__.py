@@ -114,7 +114,28 @@ async def on_load(server: PluginServerInterface, _) -> None:
         qq_connection_type = gugubot_config.get_keys(
             ["connector", "QQ", "connection", "type"], "onebot"
         )
-        if str(qq_connection_type).lower() == "official":
+        conn_type = str(qq_connection_type).lower()
+
+        # ---- 配置交叉校验：常见部署错误提前明确警告 ----
+        official_cfg = gugubot_config.get_keys(
+            ["connector", "QQ", "connection", "official"], {}
+        ) or {}
+        has_appid = bool((official_cfg.get("appid") or "").strip())
+        has_secret = bool((official_cfg.get("secret") or "").strip())
+        if conn_type == "official":
+            if not (has_appid and has_secret):
+                server.logger.error(
+                    "[GUGUBot] 配置错误：connection.type=official 但 appid/secret 未填写！"
+                    "请到 q.qq.com 获取并填入 connector.QQ.connection.official 下，"
+                    "或将 type 改回 onebot 使用 NapCat 等中间件。"
+                )
+        elif has_appid and has_secret:
+            server.logger.warning(
+                "[GUGUBot] 提示：检测到已填写官方 appid/secret，但 connection.type 不是 "
+                "official（当前走 OneBot）。如需官方直连请把 type 改为 official。"
+            )
+
+        if conn_type == "official":
             connectors.append(QQOfficialConnector(server, gugubot_config))
         else:
             connectors.append(QQWebSocketConnector(server, gugubot_config))
