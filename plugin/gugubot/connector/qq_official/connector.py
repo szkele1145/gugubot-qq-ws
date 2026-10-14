@@ -573,12 +573,15 @@ class QQOfficialConnector(BasicConnector):
     async def _send_group(self, group_openid: str, content: str) -> dict:
         """发群消息；对限频错误做短重试。
 
-        首次调用**先取池**把 msg_id/msg_seq 显式握在手里再发——重试
-        复用同一额度，绝不重复取池（被动回复额度有限，每条仅 5 次）。
+        首次调用**先取池**把结果（含 None）显式传递，杜绝 send_group_message
+        内部二次取池；重试全程复用同一额度——绝不重复取池（每条仅 5 次）。
         """
         last_err: Optional[Exception] = None
-        # 先取被动额度（msg_id 池 → None 则转主动消息/event_id 通道）
+        # 先取被动额度：有 → 显式传参；无 → event_id 通道（也只取一次）
         taken = self.reply_pool.take(group_openid)
+        event_id = None
+        if taken is None:
+            event_id = self.reply_pool.take_event(group_openid)
         for attempt in range(3):
             try:
                 if taken:
@@ -586,7 +589,14 @@ class QQOfficialConnector(BasicConnector):
                     return self.api_client.send_group_message(
                         group_openid, content, msg_id=mid, msg_seq=seq
                     )
-                return self.api_client.send_group_message(group_openid, content)
+                if event_id:
+                    return self._request_group_with_event(group_openid, content, event_id)
+                # msg_id 与 event_id 均无货：纯主动消息（显式请求，不取池）
+                return self.api_client._request(
+                    "POST",
+                    f"/v2/groups/{group_openid}/messages",
+                    {"msg_type": 0, "content": content},
+                )
             except QQOfficialAPIError as e:
                 last_err = e
                 if e.status in (401, 403):
@@ -598,8 +608,15 @@ class QQOfficialConnector(BasicConnector):
                 await asyncio.sleep(0.5 * (attempt + 1))
         raise last_err or RuntimeError("未知发送错误")
 
+    def _request_group_with_event(self, group_openid: str, content: str, event_id: str) -> dict:
+        """用 event_id 备用通道发群消息（额度已显式持有，不再取池）。"""
+        payload = {"msg_type": 0, "content": content, "event_id": event_id}
+        return self.api_client._request(
+            "POST", f"/v2/groups/{group_openid}/messages", payload
+        )
+
     async def _send_c2c(self, user_openid: str, content: str) -> dict:
-        """发 C2C 消息；限频/网络错误短重试（首取额度后全程复用）。"""
+        """发 C2C 消息；限频/网络错误短重试（首取额度后全程复用，无二次取池）。"""
         last_err: Optional[Exception] = None
         taken = self.reply_pool.take(f"c2c:{user_openid}")
         for attempt in range(3):
@@ -609,7 +626,14 @@ class QQOfficialConnector(BasicConnector):
                     return self.api_client.send_c2c_message(
                         user_openid, content, msg_id=mid, msg_seq=seq
                     )
-                return self.api_client.send_c2c_message(user_openid, content)
+                # 池空：直接主动消息（send_c2c_message 内部不再取池的
+                # 场景——msg_id=None 时它只取一次池，此处已首取为 None，
+                # 传 None 会再取一次；显式绕过用底层请求）
+                return self.api_client._request(
+                    "POST",
+                    f"/v2/users/{user_openid}/messages",
+                    {"msg_type": 0, "content": content},
+                )
             except QQOfficialAPIError as e:
                 last_err = e
                 if e.status in (401, 403):
