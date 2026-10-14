@@ -162,16 +162,32 @@ class QQOfficialWSClient:
         t.start()
 
     def _run_forever(self, *args, **kwargs) -> None:
-        """带指数退避的 run_forever 包装。"""
+        """带指数退避的 run_forever 包装。
+
+        每次重连前重新获取 wss 网关地址——官方 op:7 Reconnect 要求
+        客户端换新地址（负载均衡调度）；固定旧地址可能反复命中故障节点。
+        """
         backoff = 3
         while not self._stop_event.is_set():
+            if self._last_close_code == 4014:
+                # 能力未开通：重连必被拒，长退避等用户修配置/权限
+                if self._logger:
+                    self._logger.info("[QQ官方] 60s 后重试（等待开通能力/修改配置）")
+                self._stop_event.wait(60)
+                continue
             try:
+                # 重连（非首次）时刷新网关地址
+                if self.ws is not None:
+                    new_url = self._fetch_wss_url()
+                    self.ws = websocket.WebSocketApp(
+                        new_url,
+                        on_open=self._on_open,
+                        on_message=self._on_message,
+                        on_error=self._on_error,
+                        on_close=self._on_close,
+                    )
                 self.ws.run_forever()
-                # 4014（能力未开通）时用长退避，其余重置
-                if self._last_close_code == 4014:
-                    backoff = 60
-                else:
-                    backoff = 3  # 连接成功过则重置退避
+                backoff = 3  # 连接成功过则重置退避
             except Exception as e:
                 if self._logger:
                     self._logger.error(f"[QQ官方] WS 运行异常: {e}\n{traceback.format_exc()}")
