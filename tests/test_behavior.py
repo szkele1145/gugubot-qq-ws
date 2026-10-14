@@ -102,6 +102,47 @@ pool_old._pools["G"]["MNEW"]["ts"] = _time.time() - 99999
 assert pool_old.take_event("G") is None  # 最新已过期 → 直接 None
 print("PASS: reply_pool event_id 备用通道（新优先/无 eid/过期即停）")
 
+# ===== 测试 2c: 媒体额度守卫（use_reply_pool=False 不取池） =====
+from gugubot.connector.qq_official.api_client import QQOfficialClient
+
+media_takes = {'n': 0}
+class _MediaPool:
+    def take(self, g):
+        media_takes['n'] += 1
+        return ('M1', 0)
+    def take_event(self, g): return None
+class _MediaToken:
+    def auth_header(self): return {}
+class _MediaUp:
+    def upload_group_media(self, *a, **k): return {'file_info': 'FI'}
+    def upload_c2c_media(self, *a, **k): return {'file_info': 'FI'}
+mc_client = QQOfficialClient(_MediaToken(), _MediaPool())
+mc_client.upload_group_media = _MediaUp().upload_group_media
+mc_client.upload_c2c_media = _MediaUp().upload_c2c_media
+mc_client._request = lambda method, path, payload=None, **k: {'ok': True}
+mc_client.send_group_media_message('G', 1, 'http://x')  # 默认取池
+assert media_takes['n'] == 1
+mc_client.send_group_media_message('G', 1, 'http://x', use_reply_pool=False)
+mc_client.send_c2c_media_message('U', 1, 'http://x', use_reply_pool=False)
+assert media_takes['n'] == 1, f'媒体不该消耗额度: {media_takes}'
+print("PASS: 媒体 use_reply_pool=False 不消耗被动回复额度")
+
+# ===== 测试 2d: 图片占位过滤（_filter_images） =====
+from gugubot.connector.qq_official.connector import QQOfficialBot
+
+img_ok = {"type": "image", "data": {"url": "http://a"}}
+img_fail = {"type": "image", "data": {"url": "http://b"}}
+txt = {"type": "text", "data": {"text": "hello"}}
+segs_in = [txt, img_ok, img_fail]
+out = QQOfficialBot._filter_images(segs_in, {id(img_ok.get("data", {}))})
+assert txt in out and img_fail in out and img_ok not in out, out
+# sent_data_ids 为空 → 全部保留
+out2 = QQOfficialBot._filter_images(segs_in, set())
+assert len(out2) == 3
+# 非 list 输入原样返回
+assert QQOfficialBot._filter_images("str", set()) == "str"
+print("PASS: _filter_images 成功图过滤/失败图保留/非list兜底")
+
 # ===== 测试 3: token manager 请求体 =====
 from gugubot.connector.qq_official.token_manager import QQTokenManager
 tm = QQTokenManager("123456789", "mysecret")
