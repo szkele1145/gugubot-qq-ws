@@ -25,6 +25,15 @@ def _read_plugin_version(server: PluginServerInterface) -> str:
         return "unknown"
 
 
+def _reply_pool_total(pool) -> int:
+    """回复池全部群的 msg_id 待用总数（异常即 0）。"""
+    try:
+        keys = list(getattr(pool, "_pools", {}).keys())
+        return sum(pool.size(k) for k in keys)
+    except Exception:
+        return 0
+
+
 def _sync_webui_html_to_mcdr_config(server: PluginServerInterface) -> Optional[Path]:
     """
     每次加载插件时，用打包内的默认模板覆盖 MCDR 根目录下的
@@ -70,14 +79,33 @@ def make_api_handler(
             cfg = get_config()
             cm = get_connector_manager()
             connectors: list[str] = []
+            qq_official: dict[str, Any] = {}
             if cm is not None:
                 try:
                     for c in getattr(cm, "connectors", []) or []:
                         connectors.append(
                             str(getattr(c, "source", None) or type(c).__name__)
-                        )
+                    )
                 except Exception:
                     connectors = []
+                # QQ 官方直连健康度（duck typing：有 ws_client+id_mapper 即官方连接器）
+                try:
+                    for c in getattr(cm, "connectors", []) or []:
+                        if hasattr(c, "ws_client") and hasattr(c, "id_mapper"):
+                            ws = getattr(c, "ws_client", None)
+                            pool = getattr(c, "reply_pool", None)
+                            qq_official = {
+                                "ws_connected": bool(
+                                    ws and ws.is_connected()
+                                ),
+                                "session_id": (
+                                    (getattr(ws, "session_id", None) or "")[:8] or ""
+                                ),
+                                "reply_pool_total": _reply_pool_total(pool),
+                            }
+                            break
+                except Exception:
+                    qq_official = {}
             is_main: Optional[bool] = None
             if cfg is not None:
                 try:
@@ -92,6 +120,7 @@ def make_api_handler(
                 "version": _read_plugin_version(server),
                 "is_main_server": is_main,
                 "connectors": connectors,
+                "qq_official": qq_official,
             }
 
         if norm == "reload" and method == "POST":
