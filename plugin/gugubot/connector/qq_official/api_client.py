@@ -166,10 +166,14 @@ class QQOfficialClient:
         msg_id: Optional[str] = None,
         msg_seq: Optional[int] = None,
         srv: int = 7,
+        use_reply_pool: bool = True,
     ) -> Dict[str, Any]:
         """上传并发送群富媒体消息。
 
         file_type: 1=图片 2=视频 3=语音；url 需为公网可访问地址。
+
+        use_reply_pool=False 时强制主动消息（不消耗被动回复额度）——
+        多图连发场景调用方应传 False，把宝贵的 msg_id seq 留给文本。
         """
         info = self.upload_group_media(group_openid, file_type, url, srv=srv)
         # 上传返回体形如 {"file_info": "...", ...}；兼容直接给 file_info 的返回
@@ -182,7 +186,7 @@ class QQOfficialClient:
             raise QQOfficialAPIError(500, 500, f"富媒体上传返回异常: {info!r}")
         media = {"file_info": file_info}
 
-        if msg_id is None:
+        if msg_id is None and use_reply_pool:
             taken = self._pool.take(group_openid)
             if taken:
                 msg_id, msg_seq = taken
@@ -252,14 +256,15 @@ class QQOfficialClient:
         msg_id: Optional[str] = None,
         msg_seq: Optional[int] = None,
         srv: int = 7,
+        use_reply_pool: bool = True,
     ) -> Dict[str, Any]:
-        """上传并发送 C2C 富媒体。"""
+        """上传并发送 C2C 富媒体（use_reply_pool=False 强制主动消息省额度）。"""
         data = self.upload_c2c_media(user_openid, file_type, url, srv=srv)
         file_info = data.get("file_info") if isinstance(data, dict) else None
         if not file_info:
             raise QQOfficialAPIError(500, 500, f"富媒体上传返回异常: {data!r}")
 
-        if msg_id is None:
+        if msg_id is None and use_reply_pool:
             taken = self._pool.take(f"c2c:{user_openid}")
             if taken:
                 msg_id, msg_seq = taken

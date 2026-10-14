@@ -101,12 +101,20 @@ class QQOfficialBot:
     async def _send_media_by_url(
         self, media_url: str, file_type: int, *, is_group: bool, openid: str
     ) -> None:
-        """上传并发送一条富媒体（公网 URL）。失败抛 QQOfficialAPIError。"""
+        """上传并发送一条富媒体（公网 URL）。失败抛 QQOfficialAPIError。
+
+        媒体强制主动消息（use_reply_pool=False）：多图连发不消耗宝贵的
+        被动回复 seq，把额度留给随后的文本消息。
+        """
         api = self._c.api_client
         if is_group:
-            api.send_group_media_message(openid, file_type, media_url)
+            api.send_group_media_message(
+                openid, file_type, media_url, use_reply_pool=False
+            )
         else:
-            api.send_c2c_media_message(openid, file_type, media_url)
+            api.send_c2c_media_message(
+                openid, file_type, media_url, use_reply_pool=False
+            )
 
     async def _send_medias(self, message, openid: str, *, is_group: bool) -> set:
         """图片段（及可选视频段）→ 官方富媒体。
