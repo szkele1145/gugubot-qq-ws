@@ -306,17 +306,22 @@ class QQOfficialConnector(BasicConnector):
         notice_groups = config.get_keys(
             ["connector", "QQ", "permissions", "notice_forward_groups"], []
         )
+        # !!qq 跨平台广播的自定义转发目标群也参与绑定
+        cross_groups = config.get_keys(
+            ["system", "cross_broadcast", "qq_forward_group_ids"], []
+        )
         if self.logger:
             self.logger.info(
                 f"{self.log_prefix} 监听配置读取结果：group_ids={group_ids!r} "
                 f"forward_group_ids={forward_ids!r} admin_group_ids={admin_groups!r} "
-                f"notice_forward_groups={notice_groups!r}"
+                f"notice_forward_groups={notice_groups!r} "
+                f"cross_qq_forward={cross_groups!r}"
                 + ("（提示：均为空 = 宽松模式监听所有已绑定群）"
-                   if not any([group_ids, forward_ids, admin_groups, notice_groups]) else "")
+                   if not any([group_ids, forward_ids, admin_groups, notice_groups, cross_groups]) else "")
             )
-        # 通知群也进绑定槽位（启动/关服通知需要向 notice_forward_groups 发送）
+        # 通知群/跨平台转发群也进绑定槽位（通知与 !!qq 需要向这些群发送）
         self.id_mapper.register_legacy_groups(
-            group_ids + forward_ids + admin_groups + notice_groups
+            group_ids + forward_ids + admin_groups + notice_groups + cross_groups
         )
 
         # intents
