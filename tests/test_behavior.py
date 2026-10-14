@@ -78,6 +78,29 @@ assert mid == "M1" and seq == 0, "M2 用尽后应回退 M1"
 assert pool.take("EMPTY") is None
 print("PASS: reply_pool 最新优先 + seq 递增 + 回退")
 
+# ===== 测试 2b: reply_pool event_id 备用通道 =====
+import time as _time
+pool_ev = QQReplyPool()
+pool_ev.add("G", "M1", event_id="EV1")
+_time.sleep(0.02)
+pool_ev.add("G", "M2", event_id="EV2")
+# 最新的 event_id 优先
+assert pool_ev.take_event("G") == "EV2", pool_ev.take_event("G")
+# 无 event_id 的条目 → 返回 None
+pool_none = QQReplyPool()
+pool_none.add("G", "MX")  # 无 event_id
+assert pool_none.take_event("G") is None
+# 过期条目 → 不返回且停止扫描更旧条目
+pool_old = QQReplyPool()
+pool_old.add("G", "MOLD", event_id="EVOLD")
+pool_old._pools["G"]["MOLD"]["ts"] = _time.time() - 99999
+_time.sleep(0.02)
+pool_old.add("G", "MNEW", event_id="EVNEW")
+assert pool_old.take_event("G") == "EVNEW"
+pool_old._pools["G"]["MNEW"]["ts"] = _time.time() - 99999
+assert pool_old.take_event("G") is None  # 最新已过期 → 直接 None
+print("PASS: reply_pool event_id 备用通道（新优先/无 eid/过期即停）")
+
 # ===== 测试 3: token manager 请求体 =====
 from gugubot.connector.qq_official.token_manager import QQTokenManager
 tm = QQTokenManager("123456789", "mysecret")
