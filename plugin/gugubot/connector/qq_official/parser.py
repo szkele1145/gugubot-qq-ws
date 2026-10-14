@@ -118,6 +118,48 @@ class QQOfficialParser(BasicParser):
                 )
             raise
 
+    def _expand_content_segments(
+        self,
+        content: str,
+        id_mapper,
+        mention_names: Optional[dict] = None,
+        bot_official_id: str = "",
+    ) -> list:
+        """把官方 content 的文本/@标记流转成消息段序列。
+
+        - `<@!openid>` 原位展开为 at 段（@位置保真）
+        - `<@!机器人自身id>` 剔除
+        - face 表情等平台标记清理
+        """
+        mention_names = mention_names or {}
+        out = []
+        pos = 0
+        for m in _AT_USER_PATTERN.finditer(content):
+            if m.start() > pos:
+                out.append(("text", content[pos:m.start()]))
+            openid = m.group(1)
+            if not (bot_official_id and openid == bot_official_id):
+                out.append(("at", openid))
+            pos = m.end()
+        if pos < len(content):
+            out.append(("text", content[pos:]))
+
+        segments = []
+        for kind, value in out:
+            if kind == "text":
+                cleaned = _clean_official_content(value).strip()
+                if cleaned:
+                    segments.append({"type": "text", "data": {"text": cleaned}})
+            else:
+                segments.append({
+                    "type": "at",
+                    "data": {
+                        "qq": id_mapper.to_legacy_user(value),
+                        "name": mention_names.get(value, ""),
+                    },
+                })
+        return segments
+
     # ------------------------------------------------------------------ #
     # 群消息
     # ------------------------------------------------------------------ #
@@ -170,35 +212,11 @@ class QQOfficialParser(BasicParser):
             for m in (data.get("mentions") or [])
             if isinstance(m, dict) and m.get("id")
         }
-        text_parts = []  # (kind, value)：kind ∈ {"text", "at"}
-        pos = 0
-        for m in _AT_USER_PATTERN.finditer(content):
-            if m.start() > pos:
-                text_parts.append(("text", content[pos:m.start()]))
-            openid = m.group(1)
-            if bot_official_id and openid == bot_official_id:
-                pass  # @机器人自身：剔除
-            else:
-                text_parts.append(("at", openid))
-            pos = m.end()
-        if pos < len(content):
-            text_parts.append(("text", content[pos:]))
-
-        # 文本/标记流 → 消息段序列（face 表情清理、@人转虚拟号 at 段）
-        for kind, value in text_parts:
-            if kind == "text":
-                cleaned = _clean_official_content(value).strip()
-                if cleaned:
-                    segments.append({"type": "text", "data": {"text": cleaned}})
-            else:
-                name = mention_names.get(value, "")
-                segments.append({
-                    "type": "at",
-                    "data": {
-                        "qq": id_mapper.to_legacy_user(value),
-                        "name": name,
-                    },
-                })
+        segments.extend(
+            self._expand_content_segments(
+                content, id_mapper, mention_names, bot_official_id
+            )
+        )
 
         # 显示名：官方下发真实昵称 username（新平台能力）；没有则回退虚拟号
         username = (author.get("username", "") or "").strip()
@@ -279,27 +297,11 @@ class QQOfficialParser(BasicParser):
         # @标记原位展开为 at 段（与群消息一致）
         bot_official_id = str(getattr(self.connector.bot, "self_id", "") or "")
         segments = self._build_segments("", data.get("attachments"))
-        text_parts = []
-        pos = 0
-        for m in _AT_USER_PATTERN.finditer(content):
-            if m.start() > pos:
-                text_parts.append(("text", content[pos:m.start()]))
-            openid = m.group(1)
-            if not (bot_official_id and openid == bot_official_id):
-                text_parts.append(("at", openid))
-            pos = m.end()
-        if pos < len(content):
-            text_parts.append(("text", content[pos:]))
-        for kind, value in text_parts:
-            if kind == "text":
-                cleaned = _clean_official_content(value).strip()
-                if cleaned:
-                    segments.append({"type": "text", "data": {"text": cleaned}})
-            else:
-                segments.append({
-                    "type": "at",
-                    "data": {"qq": id_mapper.to_legacy_user(value), "name": ""},
-                })
+        segments.extend(
+            self._expand_content_segments(
+                content, id_mapper, {}, bot_official_id
+            )
+        )
 
         if await self._should_exclude_user(legacy_user):
             return None
