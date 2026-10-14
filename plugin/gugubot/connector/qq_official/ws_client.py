@@ -63,8 +63,7 @@ OP_RECONNECT = 7       # 服务端 → 客户端：要求断开重连（换 wss 
 OP_INVALID_SESSION = 9 # 服务端 → 客户端：会话失效（d=false 时重新 Identify）
 OP_HELLO = 10          # 服务端 → 客户端：连接建立后下发（含 heartbeat_interval）
 OP_HEARTBEAT_ACK = 11  # 服务端 → 客户端：心跳确认
-OP_HTTP_CALLBACK_ACK = 12
-OP_RESUME_ACK = 13
+# （op:12 HTTP 回调 ACK、op:13 回调地址验证仅 webhook 模式使用，WS 模式无此交互）
 
 
 class QQOfficialWSClient:
