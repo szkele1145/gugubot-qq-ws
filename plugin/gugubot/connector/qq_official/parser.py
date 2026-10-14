@@ -185,7 +185,13 @@ class QQOfficialParser(BasicParser):
         #   消息到达时按登记顺序自动绑定，实现旧配置完全兼容）
         if not id_mapper.legacy_group_display_id(group_openid):
             bound = id_mapper.bind_group_openid(group_openid)
-            if bound is None and self.logger:
+            if bound is not None:
+                # 绑定成功：清除 connector 的"未绑定警告"去重标记
+                # （若该群此前广播被跳过并 warning 过，恢复提示资格）
+                warned = getattr(connector, "_warned_unbound", None)
+                if warned is not None:
+                    warned.discard(str(bound))
+            elif self.logger:
                 # 无可绑定槽位：该群用虚拟号继续（仅当配置含虚拟号或
                 # 后续绑定时才会转发），打 info 便于排查
                 display = id_mapper.group_legacy_display(group_openid)

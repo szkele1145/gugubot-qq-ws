@@ -516,10 +516,17 @@ class QQOfficialConnector(BasicConnector):
                     or not t.isdigit()      # openid 原文（非纯数字）
                 )
                 if not bound:
-                    self.logger.warning(
-                        f"{self.log_prefix} 群 {target_id} 尚未绑定 openid"
-                        f"（群内 @机器人 发条消息即可自动绑定），本次跳过"
-                    )
+                    # 每个未绑定群只 warning 一次（MC 每条聊天都广播，
+                    # 不去重会刷屏）；成功绑定后从去重集移除
+                    warned = getattr(self, "_warned_unbound", None)
+                    if warned is None:
+                        warned = self._warned_unbound = set()
+                    if t not in warned:
+                        warned.add(t)
+                        self.logger.warning(
+                            f"{self.log_prefix} 群 {target_id} 尚未绑定 openid"
+                            f"（群内 @机器人 发条消息即可自动绑定），后续将静默跳过"
+                        )
                     continue
 
             for part in message_parts:
