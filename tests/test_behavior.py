@@ -52,7 +52,8 @@ u2 = mapper.to_legacy_user("OPENID_USER_X")
 assert u1 == u2 and u1.startswith("1000"), f"用户映射失败: {u1}"
 assert mapper.to_official_user(u1) == "OPENID_USER_X"
 
-# 持久化后重载
+# 持久化后重载（flush 模拟插件卸载强制落盘；_save 是 0.2s 合并写）
+mapper.flush()
 mapper2 = QQIDMapper(data_file=tmp)
 mapper2.register_legacy_groups(["123456", "789012"])
 assert mapper2.to_legacy_group("OPENID_GROUP_A") == "123456"

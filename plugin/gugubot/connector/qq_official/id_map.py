@@ -51,6 +51,9 @@ class QQIDMapper:
         self._next_user = _BASE_USER
         self._next_group = _BASE_GROUP
 
+        # 合并写状态
+        self._flush_pending = False
+
         if self._data_file is not None:
             self._load()
 
@@ -85,18 +88,32 @@ class QQIDMapper:
                 self._logger.warning(f"[QQ官方] 读取 ID 映射文件失败: {e}")
 
     def _save(self) -> None:
-        """立即原子落盘（tmp + rename 防半截文件）。
+        """合并写：标记脏 + 0.2s 去抖统一落盘。
 
-        说明：映射只在「新 openid 首次出现」时写入（低频一次性事件），
-        高频消息路径（已映射 openid 的重复查询）不触发写盘，因此直写
-        无性能问题，且保证崩溃零丢失——虚拟号绝不能漂移。
+        场景：@ 原位展开会让一条消息触发多个新 openid 的映射注册
+        （@ 三个新人 = 三次全量 JSON dump）。去抖窗口内合并为一次
+        写盘；**flush()（插件卸载）与进程退出前已覆盖 _write_file
+        保证最终落盘**。窗口极短（0.2s），崩溃丢失风险可忽略。
         """
         with self._lock:
-            self._write_file()
+            if self._flush_pending:
+                return  # 已有待写盘任务
+            self._flush_pending = True
+
+        def _delayed_write():
+            with self._lock:
+                # 窗口内可能又有新映射，一并写入
+                self._flush_pending = False
+                self._write_file()
+
+        t = threading.Timer(0.2, _delayed_write)
+        t.daemon = True
+        t.start()
 
     def flush(self) -> None:
-        """立即落盘（兼容接口，直写下即 no-op）。"""
+        """立即落盘（插件卸载/重载时调用；兼并执行待写盘内容）。"""
         with self._lock:
+            self._flush_pending = False
             self._write_file()
 
     def _write_file(self) -> None:
