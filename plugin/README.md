@@ -62,6 +62,27 @@ GUGUBot 是一个专为 MCDReforged 设计的 QQ 机器人插件，支持离线�
 
 ## 快速开始
 
+> [!TIP]
+> **QQ 官方开放平台直连（v2.2.6 新增）**
+>
+> 无需 NapCat / Lagrange / Gensokyo 等中间件——填入 [q.qq.com](https://q.qq.com)
+> 获取的 AppID / AppSecret 即可直连官方机器人：
+>
+> ```yaml
+> connector:
+>   QQ:
+>     connection:
+>       type: official          # 官方直连（默认 onebot 走中间件）
+>       official:
+>         appid: "你的AppID"
+>         secret: "你的AppSecret"
+> ```
+>
+> 内置 Gensokyo 式 msg_id + event_id 双通道被动回复池，绕开官方主动
+> 消息月度限额。群号沿用旧配置（首个在群里发消息的群自动绑定）。
+> 新增 `#状态`（管理员查健康度）与 `#我是谁`（查自己的虚拟号/绑定）。
+> 详见《改造说明.md》。
+
 ### 前置依赖
 
 在安装 GUGUBot 之前，请确保已安装以下依赖：
