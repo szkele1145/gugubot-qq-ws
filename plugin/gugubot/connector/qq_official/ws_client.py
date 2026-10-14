@@ -262,10 +262,17 @@ class QQOfficialWSClient:
             self._schedule_reconnect()
 
         elif op == OP_INVALID_SESSION:
-            if self._logger:
-                self._logger.warning("[QQ官方] 会话失效（op:9），重新鉴权")
-            self.session_id = None
-            self.last_seq = None
+            # 官方规范：d=false → resume 被拒，需全新 Identify；d=true 可重试 resume
+            d_val = data.get("d")
+            if d_val is False:
+                if self._logger:
+                    self._logger.warning("[QQ官方] 会话失效（op:9 d=false），清除会话重新鉴权")
+                self.session_id = None
+                self.last_seq = None
+            else:
+                if self._logger:
+                    self._logger.warning("[QQ官方] 会话失效（op:9），稍后重试 Resume")
+                # 保留 session_id/last_seq，等下一个 Hello 时 _send_resume 重试
 
         else:
             if self._logger:
@@ -293,6 +300,20 @@ class QQOfficialWSClient:
                     self._on_ready(payload)
                 except Exception:
                     pass
+            return
+
+        if event_type == "RESUMED":
+            # Resume 成功：会话恢复，补发事件随后下发
+            self._ready = True
+            if self._logger:
+                self._logger.info("[QQ官方] 会话恢复成功（RESUMED），开始接收补发事件")
+            return
+
+        if event_type in ("AT_MESSAGE_CREATE", "DIRECT_MESSAGE_CREATE"):
+            # 频道类事件：官方群聊机器人常见场景不会订阅；若误订阅（配置
+            # direct_message/guild_messages 开了但事件意外到达），显式忽略
+            if self._logger:
+                self._logger.debug(f"[QQ官方] 忽略频道事件 {event_type}")
             return
 
         if self._on_dispatch:
