@@ -92,6 +92,15 @@ class InactiveCheckSystem(BasicConfig, BasicSystem):
     def set_qq_connector(self, qq_connector) -> None:
         """设置QQ连接器引用"""
         self.qq_connector = qq_connector
+        # 官方直连模式下 get_group_member_list 返回空（官方无此接口），
+        # 本系统依赖成员列表——给出一次性明确提示，避免静默失效
+        if qq_connector is not None and hasattr(qq_connector, "ws_client") and hasattr(qq_connector, "id_mapper"):
+            if getattr(self, "enable", False):
+                self.logger.warning(
+                    "[不活跃检查] 检测到 QQ 官方直连模式：官方平台不提供群成员"
+                    "列表接口，不活跃检查无法获取群成员，系统将不生效。"
+                    "建议在配置中关闭 system.inactive_check.enable。"
+                )
 
     def set_whitelist_system(self, whitelist_system) -> None:
         """设置白名单系统引用"""

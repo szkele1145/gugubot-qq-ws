@@ -254,7 +254,7 @@ class QQOfficialBot:
         return {
             "status": "ok",
             "retcode": 0,
-            "data": {"app_name": "gugubot-official", "app_version": "2.2.4"},
+            "data": {"app_name": "gugubot-official", "app_version": "2.2.6"},
         }
 
     # 兼容 OneBot Bot 的请求跟踪字段（BasicSystem 某些路径会读 function_return）
