@@ -75,12 +75,13 @@ class QQOfficialParser(BasicParser):
         return False
 
     async def parse(self, raw_message) -> Optional[BroadcastInfo]:
-        """解析官方 WS 推送的 Dispatch 事件。
+        """解析官方 WS 推送的 Dispatch 事件（connector 包装后的任务 dict）。
 
         Parameters
         ----------
         raw_message : dict
-            事件 ``d`` 字段（已由 connector 从 WS 帧解出）。
+            形如 ``{"_event_name": 事件类型, "_data": 事件体 d, "_event_id": 外层事件id}``。
+            兼容直接传事件体 d（缺 ``_event_name`` 时按 None 处理）。
 
         Returns
         -------
