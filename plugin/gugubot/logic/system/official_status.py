@@ -59,9 +59,22 @@ class OfficialStatusSystem(BasicSystem):
         content = message[0].get("data", {}).get("text", "")
         prefix = self.config.get_keys(["GUGUBot", "command_prefix"], "#")
         rest = content[len(prefix):].strip() if content.startswith(prefix) else ""
-        if rest not in ("状态", "status", "official_status"):
-            return False
 
+        # ---- #状态 / #status：官方直连健康度 ----
+        if rest in ("状态", "status", "official_status"):
+            return await self._handle_status(broadcast_info, connector)
+
+        # ---- #我是谁 / #whoami：自助查询虚拟号与绑定 ----
+        if rest in ("我是谁", "whoami"):
+            return await self._handle_whoami(broadcast_info, connector)
+
+        return False
+
+    # ------------------------------------------------------------------ #
+    # #状态
+    # ------------------------------------------------------------------ #
+
+    async def _handle_status(self, broadcast_info: BroadcastInfo, connector) -> bool:
         if not broadcast_info.is_admin:
             await self.reply_to_source(
                 broadcast_info,
@@ -117,6 +130,56 @@ class OfficialStatusSystem(BasicSystem):
 
         await self.reply_to_source(
             broadcast_info, [MessageBuilder.text("\n".join(lines))]
+        )
+        return True
+
+    # ------------------------------------------------------------------ #
+    # #我是谁
+    # ------------------------------------------------------------------ #
+
+    async def _handle_whoami(self, broadcast_info: BroadcastInfo, connector) -> bool:
+        """自助查询：我的虚拟号 / 绑定游戏名 / 群角色。
+
+        官方模式下用户看不到自己的真实 QQ 号，此命令让他能拿到
+        虚拟号（填 admin_ids 用）和绑定信息。
+        """
+        sender_id = str(broadcast_info.sender_id or "")
+        if not sender_id:
+            await self.reply_to_source(
+                broadcast_info, [MessageBuilder.text("无法识别你的身份")]
+            )
+            return True
+
+        lines = [f"你的虚拟号: {sender_id}"]
+
+        # 绑定游戏名（bound 系统的 player_manager）
+        try:
+            bound_system = self.system_manager.get_system("bound")
+            if bound_system:
+                player = bound_system.player_manager.get_player(sender_id)
+                if player:
+                    names = list(player.java_name or []) + list(player.bedrock_name or [])
+                    if names:
+                        lines.append(f"绑定的游戏名: {', '.join(names)}")
+                    else:
+                        lines.append("尚未绑定游戏名（用绑定命令绑定后此处显示）")
+                else:
+                    lines.append("尚未绑定游戏名")
+        except Exception:
+            pass
+
+        # 群内角色（官方事件 member_role）
+        raw = broadcast_info.raw if isinstance(broadcast_info.raw, dict) else {}
+        author = raw.get("author", {}) if isinstance(raw.get("author"), dict) else {}
+        role = (author.get("member_role") or "").strip()
+        if role:
+            role_map = {"owner": "群主", "admin": "管理员", "member": "普通成员"}
+            lines.append(f"群内角色: {role_map.get(role, role)}")
+
+        lines.append(f"管理员设置: 把虚拟号 {sender_id} 填进 admin_ids 即可")
+
+        await self.reply_to_source(
+            broadcast_info, [MessageBuilder.text('\n'.join(lines))]
         )
         return True
 

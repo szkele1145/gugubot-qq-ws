@@ -128,5 +128,37 @@ r = loop.run_until_complete(system.process_broadcast_info(mk_info(True)))
 assert r is False and not REPLIES
 print("PASS: OneBot 模式自动跳过")
 
+# ===== #我是谁：官方模式响应 =====
+system._connector_manager = FakeCM()  # 恢复官方连接器
+
+def mk_whoami():
+    return BroadcastInfo(
+        event_type="message",
+        event_sub_type="group",
+        message=[{"type": "text", "data": {"text": "#我是谁"}}],
+        raw={"author": {"member_openid": "OPENID_U1", "member_role": "admin"}},
+        _source=Source("QQ"),
+        source_id="1103662998",
+        sender="小明",
+        sender_id="100000000000",
+        is_admin=True,
+    )
+
+REPLIES.clear()
+r = loop.run_until_complete(system.process_broadcast_info(mk_whoami()))
+assert r is True and REPLIES, (r, REPLIES)
+text = REPLIES[0][0]["data"]["text"]
+assert "100000000000" in text, text            # 虚拟号
+assert "管理员" in text, text                   # 群角色
+assert "admin_ids" in text, text                # 管理员设置指引
+print("PASS: #我是谁 虚拟号/角色/指引全展示")
+
+# OneBot 模式下 #我是谁 → 跳过
+system._connector_manager = types.SimpleNamespace(connectors=[])
+REPLIES.clear()
+r = loop.run_until_complete(system.process_broadcast_info(mk_whoami()))
+assert r is False and not REPLIES
+print("PASS: OneBot 模式 #我是谁 自动跳过")
+
 print()
 print("OFFICIAL STATUS TEST PASSED")
