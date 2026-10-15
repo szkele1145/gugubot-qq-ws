@@ -144,10 +144,15 @@ class QQOfficialBot:
                 src = file_
             else:
                 if log:
-                    log.warning(
-                        f"{prefix} 官方平台不支持本地图片，跳过；请配置公网图床"
-                        + (f"（{summary}）" if summary else "")
-                    )
+                    # 一次性提示（本地图片反复出现时不刷屏）；本连接器
+                    # 生命周期内只提醒一次"官方平台不支持本地图片"
+                    warned = getattr(self._c, "_warned_local_media", False)
+                    if not warned:
+                        self._c._warned_local_media = True
+                        log.warning(
+                            f"{prefix} 官方平台不支持本地图片，此类图片将跳过"
+                            "（如需转发图片请配置公网图床；本提示仅显示一次）"
+                        )
                 continue
             try:
                 await self._send_media_by_url(src, 1, is_group=is_group, openid=openid)
