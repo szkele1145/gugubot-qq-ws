@@ -68,8 +68,11 @@ class FakeConfig(dict):
 
 cfg = FakeConfig()
 cfg["connector"] = {
-    "minecraft": {"source_name": "Minecraft", "native_chat": {"enable": True, "show_group_prefix": True}},
-    "QQ": {"source_name": "QQ", "permissions": {"custom_group_name": {}}},
+    "minecraft": {
+        "source_name": "Minecraft",
+        "native_chat": {"enable": True, "show_group_prefix": True},
+    },
+    "QQ": {"source_name": "QQ", "permissions": {"custom_group_name": {"123456": "一群"}}},
 }
 
 EXECUTED = []
@@ -114,16 +117,59 @@ asyncio.run(run())
 assert len(EXECUTED) == 1, EXECUTED
 cmd = EXECUTED[0]
 print("CMD:", cmd)
-# 新格式：guguchat inject "<玩家名>" [QQ转发]玩家名:消息（message 原文、无引号包裹）
-assert cmd.startswith('guguchat inject "Steve" [QQ转发]Steve:'), cmd
-print("PASS: native_chat 注入命令生成 + [QQ转发]玩家名: 格式（message 原文）")
 
-# show_group_prefix=false → 无前缀（纯消息）
+import json as _json
+
+# 新格式：tellraw @a <json>，正文 = [群名] [QQ转发]名字:消息
+assert cmd.startswith("tellraw @a "), cmd
+payload = _json.loads(cmd[len("tellraw @a "):])
+text = "".join(p.get("text", "") for p in payload)
+# 群名前缀 + [QQ转发]名字: 都在
+assert text.startswith("[一群] [QQ转发]Steve:"), text
+# 消息原文（含引号/反斜杠）逐字保留，不做 brigadier 转义
+assert '你好"世界"\\' in text, text
+print("PASS: tellraw 系统消息注入（[群名] [QQ转发]名字: + 消息原文）")
+
+# show_group_prefix=false → 只去掉 [群名]，[QQ转发]名字: 必须保留
 cfg["connector"]["minecraft"]["native_chat"]["show_group_prefix"] = False
 EXECUTED.clear()
 asyncio.run(run())
-assert "[QQ转发]" not in EXECUTED[0], EXECUTED[0]
-print("PASS: show_group_prefix=false 无前缀")
+cmd2 = EXECUTED[0]
+assert cmd2.startswith("tellraw @a "), cmd2
+text2 = "".join(p.get("text", "") for p in _json.loads(cmd2[len("tellraw @a "):]))
+assert "[一群]" not in text2, text2
+assert text2.startswith("[QQ转发]Steve:"), text2
+print("PASS: show_group_prefix=false 只去掉[群名]，[QQ转发]名字: 依然存在")
+
+# prefix_color 生效
+cfg["connector"]["minecraft"]["native_chat"]["show_group_prefix"] = True
+cfg["connector"]["minecraft"]["native_chat"]["prefix_color"] = "gold"
+EXECUTED.clear()
+asyncio.run(run())
+pl3 = _json.loads(EXECUTED[0][len("tellraw @a "):])
+assert any(p.get("color") == "gold" and "[QQ转发]" in p.get("text", "") for p in pl3), pl3
+print("PASS: prefix_color 应用到 [QQ转发]名字: 片段")
+
+# 危险字符不会破坏命令（换行/控制字符已转义，json 单行）
+cfg["connector"]["minecraft"]["native_chat"]["prefix_color"] = ""
+async def run_danger():
+    pi = ProcessedInfo(
+        processed_message=[{"type": "text", "data": {"text": "第一行\n第二行\r结尾"}}],
+        _source=Source("QQ"),
+        source_id="123456",
+        sender="坏\"名",
+        sender_id="100000000002",
+    )
+    await conn.send_message(pi)
+EXECUTED.clear()
+asyncio.run(run_danger())
+c = EXECUTED[0]
+assert "\n" not in c and "\r" not in c, repr(c)
+pl4 = _json.loads(c[len("tellraw @a "):])
+t4 = "".join(p.get("text", "") for p in pl4)
+assert "第一行 第二行 结尾" in t4, t4
+assert '[QQ转发]坏"名:' in t4, t4
+print("PASS: 换行/引号安全（单行 json，正文换行折叠为空格）")
 
 print()
 print("ALL NATIVE_CHAT TESTS PASSED")

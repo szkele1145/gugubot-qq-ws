@@ -19,15 +19,21 @@
 </div>
 
 > [!IMPORTANT]
-> **本仓库为增强改造版 v2.2.6**（基于上游 v2.2.4），新增两大能力：
+> **本仓库为增强改造版 v2.2.7**（基于上游 v2.2.4），新增两大能力：
 >
 > 1. **QQ 官方开放平台原生 WS 直连**——填 AppID/AppSecret 即可直连官方
 >    机器人，无需 NapCat/Lagrange/Gensokyo 等中间层；内置 Gensokyo 式
 >    msg_id + event_id 双通道被动回复池，绕开官方主动消息限额。
 >    详见《改造说明.md》。
-> 2. **GuguChat Mod（1.21.1 NeoForge）**——QQ→MC 消息以「绑定玩家名 +
->    原版聊天包」注入，格式 `<QQ> [QQ转发]玩家名:消息`，兼容 AtomChat
->    等聊天框模组；`/guguchat status` 查看运行状态。
+> 2. **系统消息通道注入**——QQ→MC 消息以 `[QQ转发]名字:消息` 的纯文本
+>    形式经原版 `/tellraw`（系统消息包）送入聊天框。系统消息**不做聊天
+>    签名验证**，离线/未签名服务器不会再出现 `聊天验证错误`（此前用
+>    PlayerChat 包注入时的固有问题）。名字取绑定的游戏名，未绑定则取 QQ
+>    昵称；**无需安装任何 Mod**。
+>    配置：`connector.minecraft.native_chat.enable: true`；
+>    `show_group_prefix` 控制是否额外显示 `[群名]`，`prefix_color` 可给
+>    `[QQ转发]名字:` 上色。
+>    （旧版 GuguChat Mod 的 `/guguchat status` 仍可用，但已非必需。）
 >
 > 旧 OneBot 配置**完全兼容**：`connection.type` 不填或填 `onebot` 时行为
 > 与原版一致；填 `official` 切换官方直连。

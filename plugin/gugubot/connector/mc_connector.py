@@ -96,6 +96,65 @@ class MCConnector(BasicConnector):
                 )
         return self._native_chat_available
 
+    def _inject_system_chat(
+        self,
+        display_name: str,
+        plain: str,
+        show_group_prefix: bool = True,
+        group_name: str = "",
+        prefix_color: str = "",
+    ) -> bool:
+        """用 /tellraw 把消息送进系统聊天通道，成功返回 True。
+
+        为什么用 tellraw 而不是 mod 注入的 PlayerChat 包：
+          - tellraw 由服务端生成 ClientboundSystemChatPacket —— 系统消息
+            通道不做聊天签名验证，未签名/offline 服务器不会再出现
+            "聊天验证错误"
+          - 渲染的是纯文本本身（所见即所得），不经过聊天头 /
+            玩家档案解析，因此不依赖 UUID、头像等
+          - 无需安装 mod，原版服务器即可用
+
+        渲染结果（[QQ转发]名字: 永远存在）：
+            [群名] [QQ转发]名字:消息内容
+            show_group_prefix 只控制开头的 [群名]。
+
+        注意：名字与正文之间、正文内部不做任何二次加工 ——
+        tellraw 的 text 是字面量，所见即所得。
+        """
+        import json
+
+        try:
+            payload = []
+
+            # 可选的群名前缀：[群名] （与 [QQ转发] 无关，各自独立）
+            if show_group_prefix and group_name:
+                payload.append({"text": f"[{group_name}] "})
+
+            # [QQ转发]名字: 是消息的固定开头，不受任何开关影响
+            head = f"[QQ转发]{display_name}:"
+            if prefix_color:
+                payload.append({"text": head, "color": prefix_color})
+            else:
+                payload.append({"text": head})
+
+            payload.append({"text": plain})
+
+            # json.dumps + ensure_ascii=False：中文原样输出；控制字符
+            # 由 dumps 自动转义为 \\uXXXX，不会破坏命令解析
+            raw = json.dumps(payload, ensure_ascii=False)
+            # 换行会在服务器命令行里截断命令，统一转义掉
+            raw = raw.replace("\n", "\\n").replace("\r", "\\r")
+
+            # execute() = 服务端 stdin（原版命令）；execute_command() 是
+            # MCDR 自己的 !! 命令系统，走不到服务端
+            self.server.execute(f"tellraw @a {raw}")
+            return True
+        except Exception as e:
+            self.logger.warning(
+                f"{self.log_prefix} 系统消息注入失败，回退 server.say: {e}"
+            )
+            return False
+
     async def disconnect(self) -> None:
         """Tear down the connection (no-op since MCDR manages the lifecycle)."""
         self.logger.info(f"{self.log_prefix} 已断开 ~")
@@ -203,39 +262,42 @@ class MCConnector(BasicConnector):
             )
             source = custom_group_name.get(source_id, source)
 
-            # ----- native_chat 模式：原生聊天包注入（需 GuguChat mod） -----
-            # 注入格式：[QQ转发]玩家名:我是玩家说的话
-            #   - 玩家名 = 绑定的游戏名（有绑定）或 QQ 侧显示名（无绑定）
-            #   - 消息注入为"控制台"身份的聊天头 + 正文带 [QQ转发] 前缀
+            # ----- native_chat 模式：系统消息通道注入 -----
+            # 注入格式（整行纯文本，所见即所得）：
+            #     [QQ转发]名字:我是玩家说的话
+            #   - 名字 = 绑定的游戏名（有绑定）或 QQ 侧昵称（无绑定）
+            #   - 走 ClientboundSystemChatPacket（tellraw 同款系统消息通道）：
+            #     * 无聊天头、无玩家档案查询 —— 不依赖 UUID/头像
+            #     * 不做聊天签名验证 —— 彻底规避 "聊天验证错误"
             if self._check_native_chat_available():
-                show_prefix = self.config.get_keys(
+                show_group_prefix = self.config.get_keys(
                     ["connector", "minecraft", "native_chat", "show_group_prefix"], True
+                )
+                prefix_color = self.config.get_keys(
+                    ["connector", "minecraft", "native_chat", "prefix_color"], ""
                 )
                 plain = segments_to_plain_text(message, image_as="cicode")
                 plain = plain.replace("\n", " ").replace("\r", " ").strip()
+                if not plain:
+                    plain = " "
 
                 # sender：优先绑定游戏名（player_manager 已解析），
                 # 未绑定的 QQ 用户显示原始昵称
                 display_name = (sender or "QQ用户").strip()
-                display_name = display_name.replace('"', "").replace(" ", "_")
+                # 系统消息不走 brigadier，无需替换空格；仅剔除控制字符
+                display_name = "".join(
+                    ch for ch in display_name if ch.isprintable()
+                ) or "QQ用户"
 
-                # 正文 = [QQ转发]玩家名:消息
-                body = f"[QQ转发]{display_name}:{plain}" if show_prefix else plain
-
-                # 命令格式：guguchat inject "<显示名>" <消息原文>
-                # - display 用引号包裹：brigadier 需要它解析含中文/特殊字符的名字
-                # - message 不加引号不转义：greedyString 原样吃掉行尾全部内容
-                cmd = f'guguchat inject "{display_name}" {body}'
-                try:
-                    # 注意：execute() 才是发送到服务器 stdin 的服务端命令；
-                    # execute_command() 是 MCDR 自己的 !! 命令系统，走不到 mod
-                    self.server.execute(cmd)
+                # source 已是 custom_group_name 映射后的群名（见上方）
+                if self._inject_system_chat(
+                    display_name,
+                    plain,
+                    show_group_prefix=show_group_prefix,
+                    group_name=str(source) if source else "",
+                    prefix_color=prefix_color,
+                ):
                     return
-                except Exception as e:
-                    # mod 未安装/命令失败 → 回退 say
-                    self.logger.warning(
-                        f"{self.log_prefix} native_chat 注入失败，回退 server.say: {e}"
-                    )
             # ----- native_chat 结束（失败则继续走下方 say 逻辑） -----
 
             main_content = self.builder.build(

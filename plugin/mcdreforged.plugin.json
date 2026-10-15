@@ -1,10 +1,10 @@
 {
 	"id": "gugubot",
-	"version": "2.2.6",
+	"version": "2.2.7",
 	"name": "GUGUbot",
 	"description": {
-		"en_us": "A QQ bot connect MC and QQ (supports QQ official open-platform native WebSocket)",
-		"zh_cn": "一个QQ和MC互通的机器人（支持离线服务器；新增QQ官方开放平台原生WS直连）"
+		"en_us": "A QQ bot connect MC and QQ (supports QQ official open-platform native WebSocket; system-chat injection avoids chat-validation errors)",
+		"zh_cn": "一个QQ和MC互通的机器人（支持离线服务器；QQ官方开放平台原生WS直连；系统消息通道注入，不再出现聊天验证错误）"
 	},
 	"author": [
 		"XueK__",

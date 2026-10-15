@@ -13,12 +13,14 @@ import org.apache.logging.log4j.Logger;
 import java.util.List;
 
 /**
- * /guguchat inject <显示名> <消息>   —— MCDR 插件注入入口
- * /guguchat status                   —— 查看 mod 状态（在线玩家/注入计数/最近注入）
+ * /guguchat inject <整行消息>   —— MCDR 插件注入入口（仅作 v2.2.7 之前的
+ *                              兼容备用通道；v2.2.7+ 插件改走原版 tellraw，
+ *                              本命令不再被默认调用）
+ * /guguchat status              —— 查看 mod 状态（在线玩家/注入计数/最近注入）
  * <p>
  * inject 由 MCDR 插件通过控制台 stdin 执行，mod 收到后向所有在线玩家
- * 注入一条「原生玩家聊天包」（ClientboundPlayerChatPacket），客户端按
- * 原版聊天渲染，兼容 AtomChat 等聊天框模组。
+ * 注入一条「系统消息包」（ClientboundSystemChatPacket）。系统消息通道
+ * 不做聊天签名验证，离线/未签名服务器不会出现"聊天验证错误"。
  * <p>
  * 权限：仅控制台/OP 2 级（防止玩家伪造他人发言）。
  */
@@ -29,22 +31,19 @@ public class GuguChatCommand {
     public static void register(com.mojang.brigadier.CommandDispatcher<CommandSourceStack> dispatcher) {
         dispatcher.register(LiteralArgumentBuilder.<CommandSourceStack>literal("guguchat")
             .requires(src -> src.hasPermission(2) || src.getTextName().equals("Server"))
-            // ---- inject <显示名> <消息> ----
+            // ---- inject <整行消息> ----
             .then(Commands.literal("inject")
-                .then(Commands.argument("display", StringArgumentType.string())
-                    .then(Commands.argument("message", StringArgumentType.greedyString())
-                        .executes(ctx -> {
-                            String display = StringArgumentType.getString(ctx, "display");
-                            String message = StringArgumentType.getString(ctx, "message");
-                            int n = ChatInjector.inject(display, message);
-                            if (n == 0) {
-                                ctx.getSource().sendFailure(
-                                    Component.literal("GuguChat: 没有在线玩家，消息未投递（此消息不会出现在游戏里）"));
-                                return 0;
-                            }
-                            return com.mojang.brigadier.Command.SINGLE_SUCCESS;
-                        })
-                    )
+                .then(Commands.argument("rawLine", StringArgumentType.greedyString())
+                    .executes(ctx -> {
+                        String rawLine = StringArgumentType.getString(ctx, "rawLine");
+                        int n = ChatInjector.inject(rawLine);
+                        if (n == 0) {
+                            ctx.getSource().sendFailure(
+                                Component.literal("GuguChat: 没有在线玩家，消息未投递（此消息不会出现在游戏里）"));
+                            return 0;
+                        }
+                        return com.mojang.brigadier.Command.SINGLE_SUCCESS;
+                    })
                 )
             )
             // ---- status：运行状态 ----

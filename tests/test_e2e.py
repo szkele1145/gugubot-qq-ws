@@ -203,11 +203,15 @@ asyncio.new_event_loop().run_until_complete(_run())
 assert len(EXECUTED) == 1, EXECUTED
 cmd = EXECUTED[0]
 print("CMD:", cmd[:150])
-assert cmd.startswith('guguchat inject "Steve" [QQ转发]Steve:'), cmd
+assert cmd.startswith("tellraw @a "), cmd
+# tellraw json 正文 = [QQ转发]名字:消息（CICode 在 text 里原样保留）
+assert "[QQ转发]Steve:" in cmd, cmd
 # CICode 应优先公网 url（客户端可访问），而非服务器本地路径
 assert "[[CICode,url=http://127.0.0.1:19878/img.png,name=截图]]" in cmd, cmd
 assert "看图" in cmd
-print("PASS: native_chat 端到端注入命令（[QQ转发]格式 + CICode 公网图片 + message 原文）")
+# 单行命令（换行已转义）
+assert "\n" not in cmd and "\r" not in cmd
+print("PASS: native_chat 端到端注入（tellraw 系统消息 + [QQ转发]格式 + CICode 公网图片）")
 
 # ===== C2C 单聊链路 =====
 c2c_event = {
