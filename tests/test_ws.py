@@ -94,7 +94,7 @@ def handle_client(conn):
         return payload.decode()
 
     # 2) 发 Hello (op:2)
-    send_text(json.dumps({"op": 10, "d": {"heartbeat_interval": 1000}}))
+    send_text(json.dumps({"op": 10, "d": {"heartbeat_interval": 1500}}))  # 1.5s：夹取范围内且测试可快速等到首个心跳
 
     while True:
         raw = recv_text()

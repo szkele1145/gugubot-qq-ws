@@ -253,9 +253,13 @@ class QQOfficialWSClient:
         op = data.get("op")
 
         if op == OP_HELLO:  # 服务端 Hello：op:2
-            self._heartbeat_interval = (
-                (data.get("d") or {}).get("heartbeat_interval", 30000) / 1000.0
-            )
+            raw_interval = (data.get("d") or {}).get("heartbeat_interval", 30000)
+            # 异常数据兜底：0/负值会 wait(0) 空转风暴；超大值饿死心跳
+            # 导致断连——夹到 1~300s（下限 1s 兼顾单测快速验证）
+            try:
+                self._heartbeat_interval = min(max(float(raw_interval) / 1000.0, 1.0), 300.0)
+            except (TypeError, ValueError):
+                self._heartbeat_interval = 30.0
             if self._logger:
                 self._logger.info(
                     f"[QQ官方] 收到 Hello，心跳间隔 {self._heartbeat_interval}s"
