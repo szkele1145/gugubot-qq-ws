@@ -477,8 +477,18 @@ class QQOfficialParser(BasicParser):
                 })
         return result
 
+    # 附件缓存上限（默认 512MB；0 = 不缓存，-1 = 不清理）
+    _CACHE_MAX_BYTES = 512 * 1024 * 1024
+    _CACHE_CLEAN_STATE = {"last_check": 0.0}
+
     def _cache_attachment(self, url: str, filename: str, content_type: str) -> Optional[str]:
-        """下载附件到插件数据目录，返回本地绝对路径（失败返回 None）。"""
+        """下载附件到插件数据目录，返回本地绝对路径（失败返回 None）。
+
+        缓存目录按 LRU 策略限制总大小（默认 512MB，超限删最旧文件）——
+        官方 CDN url 约 30 分钟过期，缓存的价值窗口很短，无需永久保留。
+        每次下载前最多做一次大小检查（10 分钟节流，避免高频消息时
+        反复扫描目录）。
+        """
         if not url:
             return None
         cache_enabled = self.connector.config.get_keys(
@@ -489,11 +499,18 @@ class QQOfficialParser(BasicParser):
         try:
             import hashlib
             import mimetypes
+            import time as _time
             from pathlib import Path
             import requests as _requests
 
             data_dir = Path(self.connector.server.get_data_folder()) / "attachments"
             data_dir.mkdir(parents=True, exist_ok=True)
+
+            # 大小检查节流（10 分钟一次）
+            now = _time.time()
+            if now - self._CACHE_CLEAN_STATE["last_check"] > 600:
+                self._CACHE_CLEAN_STATE["last_check"] = now
+                self._cleanup_attachment_cache(data_dir)
 
             digest = hashlib.md5(url.encode()).hexdigest()[:12]
             # 扩展名：优先按 content_type 推断，兜底用文件名
@@ -508,9 +525,40 @@ class QQOfficialParser(BasicParser):
                 resp = _requests.get(url, timeout=20)
                 resp.raise_for_status()
                 local.write_bytes(resp.content)
+                # 触碰 mtime：LRU 依据（重复出现的图保持"最新"）
+                import os as _os
+                _os.utime(local, None)
 
             return str(local)
         except Exception as e:
             if self.logger:
                 self.logger.debug(f"[QQ官方] 附件缓存失败（将直接用 url）: {e}")
             return None
+
+    @classmethod
+    def _cleanup_attachment_cache(cls, data_dir) -> None:
+        """缓存目录超过上限时按 mtime 从旧到新删除，直到回到上限内。"""
+        try:
+            max_bytes = cls._CACHE_MAX_BYTES
+            if max_bytes <= 0:
+                return
+            files = [
+                (f.stat().st_mtime, f.stat().st_size, f)
+                for f in data_dir.iterdir()
+                if f.is_file()
+            ]
+            total = sum(s for _, s, _ in files)
+            if total <= max_bytes:
+                return
+            # 最旧优先删除
+            files.sort(key=lambda x: x[0])
+            for _, size, f in files:
+                if total <= max_bytes:
+                    break
+                try:
+                    f.unlink()
+                    total -= size
+                except OSError:
+                    pass
+        except Exception:
+            pass
