@@ -30,6 +30,7 @@ OneBot 配置并存，type 字段切换）：
 from __future__ import annotations
 
 import asyncio
+import json
 import random
 import re
 import time
@@ -271,8 +272,32 @@ class QQOfficialBot:
         return {
             "status": "ok",
             "retcode": 0,
-            "data": {"app_name": "gugubot-official", "app_version": "2.2.6"},
+            "data": {"app_name": "gugubot-official", "app_version": self._plugin_version()},
         }
+
+    def _plugin_version(self) -> str:
+        """插件真实版本号（优先 MCDR 元数据，其次打包内 json，最后 unknown）。
+
+        不硬编码：bump 版本后 ``#状态`` 显示的 app_version 必须自动跟随，
+        否则会报出与实际打包版本不符的旧号。
+        """
+        server = getattr(self._c, "server", None)
+        try:
+            meta = server.get_self_metadata()
+            version = str(getattr(meta, "version", "") or "").strip()
+            if version:
+                return version
+        except Exception:
+            pass
+        try:
+            with server.open_bundled_file("mcdreforged.plugin.json") as f:
+                data = json.loads(f.read().decode("utf-8"))
+            version = str(data.get("version", "") or "").strip()
+            if version:
+                return version
+        except Exception:
+            pass
+        return "unknown"
 
     # 兼容 OneBot Bot 的请求跟踪字段（BasicSystem 某些路径会读 function_return）
     function_return: dict = {}
@@ -440,7 +465,10 @@ class QQOfficialConnector(BasicConnector):
             )
         try:
             task = {"_event_name": event_type, "_data": data, "_event_id": event_id}
-            self.server.schedule_task(self.parser.process_message(task))
+            # process_message 是协程函数：必须包装成可调用对象再交给
+            # schedule_task，否则直接调用会传入一个协程对象（不可被调度），
+            # 抛 TypeError 被外层 try/except 吞掉，导致全部 WS 事件丢失。
+            self.server.schedule_task(lambda: self.parser.process_message(task))
         except Exception as e:
             self.logger.error(
                 f"{self.log_prefix} 消息处理失败: {e}\n{traceback.format_exc()}"
@@ -615,10 +643,25 @@ class QQOfficialConnector(BasicConnector):
                 last_err = e
                 if e.status in (401, 403):
                     raise
-                if self._is_rate_limited(e):
-                    if attempt < 2:
-                        await asyncio.sleep(1 + attempt)
+                # 被动额度被官方拒绝（msg_id/event_id 过期、msg_seq 非法或
+                # 已用尽）：该条目已成废条目，丢弃并换下一条，否则每次发送
+                # 都撞同一个失效 id，白白退避重试 3 次。
+                if self._is_stale_reply_ref(e):
+                    if taken:
+                        self.reply_pool.drop(group_openid, taken[0])
+                    elif event_id:
+                        self.reply_pool.drop_event(group_openid, event_id)
+                    taken = self.reply_pool.take(group_openid)
+                    event_id = None
+                    if taken is None:
+                        event_id = self.reply_pool.take_event(group_openid)
+                    # 换到了全新额度：立即重试，退避对失效 id 毫无意义。
+                    # 没换到（池已空）说明本就是纯主动消息，无需空转重试。
+                    if taken or event_id:
                         continue
+                if self._is_rate_limited(e) and attempt < 2:
+                    await asyncio.sleep(1 + attempt)
+                    continue
                 await asyncio.sleep(0.5 * (attempt + 1))
         raise last_err or RuntimeError("未知发送错误")
 
@@ -629,10 +672,22 @@ class QQOfficialConnector(BasicConnector):
             "POST", f"/v2/groups/{group_openid}/messages", payload
         )
 
+    def _request_c2c_with_event(self, user_openid: str, content: str, event_id: str) -> dict:
+        """用 event_id 备用通道发 C2C 消息（额度已显式持有，不再取池）。"""
+        payload = {"msg_type": 0, "content": content, "event_id": event_id}
+        return self.api_client._request(
+            "POST", f"/v2/users/{user_openid}/messages", payload
+        )
+
     async def _send_c2c(self, user_openid: str, content: str) -> dict:
         """发 C2C 消息；限频/网络错误短重试（首取额度后全程复用，无二次取池）。"""
         last_err: Optional[Exception] = None
-        taken = self.reply_pool.take(f"c2c:{user_openid}")
+        pool_key = f"c2c:{user_openid}"
+        # 与群聊路径对称：msg_id 池 → event_id 通道 → 纯主动消息
+        taken = self.reply_pool.take(pool_key)
+        event_id = None
+        if taken is None:
+            event_id = self.reply_pool.take_event(pool_key)
         for attempt in range(3):
             try:
                 if taken:
@@ -640,6 +695,10 @@ class QQOfficialConnector(BasicConnector):
                     return await asyncio.to_thread(
                         self.api_client.send_c2c_message,
                         user_openid, content, msg_id=mid, msg_seq=seq
+                    )
+                if event_id:
+                    return await asyncio.to_thread(
+                        self._request_c2c_with_event, user_openid, content, event_id
                     )
                 # 池空：纯主动消息（显式请求，不取池；to_thread 不阻塞循环）
                 return await asyncio.to_thread(
@@ -652,8 +711,44 @@ class QQOfficialConnector(BasicConnector):
                 last_err = e
                 if e.status in (401, 403):
                     raise
+                # 被动引用失效：丢弃并换下一条，避免每次撞同一个废 id
+                if self._is_stale_reply_ref(e):
+                    if taken:
+                        self.reply_pool.drop(pool_key, taken[0])
+                    elif event_id:
+                        self.reply_pool.drop_event(pool_key, event_id)
+                    taken = self.reply_pool.take(pool_key)
+                    event_id = None
+                    if taken is None:
+                        event_id = self.reply_pool.take_event(pool_key)
+                    # 换到新额度才立即重试；池已空则是纯主动模式，不空转
+                    if taken or event_id:
+                        continue
+                if self._is_rate_limited(e) and attempt < 2:
+                    await asyncio.sleep(1 + attempt)
+                    continue
                 await asyncio.sleep(0.5 * (attempt + 1))
         raise last_err or RuntimeError("未知发送错误")
+
+    @staticmethod
+    def _is_stale_reply_ref(e: QQOfficialAPIError) -> bool:
+        """被动回复引用（msg_id / event_id / msg_seq）失效类错误。
+
+        与「限频」严格区分：这类错误重试同一个 id 必然继续失败，必须
+        丢弃该额度换下一条；限频则应当退避后复用同一条。
+        """
+        # 官方已知被动回复相关错误码：22009 msg_id 非法/过期
+        if e.code in (22009, 22010, 22011):
+            return True
+        if e.status not in (400, 404):
+            return False
+        text = (getattr(e, "message", "") or "").lower()
+        if not any(k in text for k in ("msg_id", "msgid", "event_id", "msg_seq")):
+            return False
+        return any(
+            k in text
+            for k in ("过期", "expired", "invalid", "无效", "非法", "不可用", "已用", "used")
+        )
 
     @staticmethod
     def _is_rate_limited(e: QQOfficialAPIError) -> bool:

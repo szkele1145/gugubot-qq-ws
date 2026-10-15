@@ -50,14 +50,16 @@ class QQReplyPool:
             pool = self._pools.setdefault(group_openid, OrderedDict())
             if msg_id in pool:
                 # 已存在：补充 event_id（可能事件先到、后来才有外层id）
-                if event_id:
+                if event_id and not pool[msg_id].get("event_id"):
                     pool[msg_id]["event_id"] = event_id
+                    pool[msg_id].setdefault("event_seq", 0)
                 return
             while len(pool) >= _POOL_LIMIT:
                 pool.popitem(last=False)
             info = {"seq": 0, "ts": time.time()}
             if event_id:
                 info["event_id"] = event_id
+                info["event_seq"] = 0  # event_id 同样受 5 次被动回复限制
             pool[msg_id] = info
 
     def take(self, group_openid: str) -> Optional[Tuple[str, int]]:
@@ -78,14 +80,18 @@ class QQReplyPool:
                 info = pool[msg_id]
                 if now - info["ts"] > _MSG_TTL:
                     # 新到旧遍历，第一条过期则更旧的必然全过期 → 停止
+                    to_drop.extend(pool.keys())  # 过期项一并回收
                     break
                 if info["seq"] >= _MAX_SEQ:
-                    to_drop.append(msg_id)
+                    # msg_id 额度用尽：若 event_id 还有额度则保留条目
+                    # （take_event 还要用），否则可回收
+                    if not info.get("event_id") or info.get("event_seq", 0) >= _MAX_SEQ:
+                        to_drop.append(msg_id)
                     continue  # 继续找次新的
                 seq = info["seq"]
                 info["seq"] = seq + 1
                 for m in to_drop:
-                    del pool[m]
+                    pool.pop(m, None)
                 return msg_id, seq
 
             # 未找到可用条目：仍清理本轮发现的用尽项
@@ -96,21 +102,33 @@ class QQReplyPool:
     def take_event(self, group_openid: str) -> Optional[str]:
         """取最新的 event_id（外层事件 id 被动回复备用通道）。
 
-        msg_id 通道用尽/过期时使用；event_id 每个事件也受 5 次限制，
-        这里不做次数追踪（超限时官方报错，drop 即可）。
+        msg_id 通道用尽/过期时使用。event_id 与 msg_id 一样每个事件最多
+        被动回复 5 次，因此这里同样递增计数，超出即跳过（否则会反复拿到
+        同一个已耗尽的 event_id，每次都被官方拒绝）。
         """
         now = time.time()
         with self._lock:
             pool = self._pools.get(group_openid)
             if not pool:
                 return None
+            to_drop = []
             for msg_id in reversed(pool):
                 info = pool[msg_id]
-                eid = info.get("event_id", "")
-                if eid and now - info["ts"] <= _MSG_TTL:
-                    return eid
                 if now - info["ts"] > _MSG_TTL:
                     break  # 新到旧遍历，第一条过期则更旧的必然过期
+                eid = info.get("event_id", "")
+                if not eid:
+                    continue
+                seq = info.get("event_seq", 0)
+                if seq >= _MAX_SEQ:
+                    to_drop.append(msg_id)
+                    continue
+                info["event_seq"] = seq + 1
+                for m in to_drop:
+                    del pool[m]
+                return eid
+            for m in to_drop:
+                pool.pop(m, None)
             return None
 
     def drop(self, group_openid: str, msg_id: str) -> None:
@@ -119,6 +137,26 @@ class QQReplyPool:
             pool = self._pools.get(group_openid)
             if pool and msg_id in pool:
                 del pool[msg_id]
+                if not pool:
+                    del self._pools[group_openid]
+
+    def drop_event(self, group_openid: str, event_id: str) -> None:
+        """event_id 通道被官方拒绝时，摘掉所有引用该 event_id 的条目的
+        event_id 字段。
+
+        一个 event 可能对应池中多条 msg_id；只清 event_id 而不删条目，
+        可保留这些条目尚未用尽的 msg_id 额度（两条通道相互独立）。
+        """
+        if not event_id:
+            return
+        with self._lock:
+            pool = self._pools.get(group_openid)
+            if not pool:
+                return
+            for info in pool.values():
+                if info.get("event_id") == event_id:
+                    info["event_id"] = ""
+                    info["event_seq"] = _MAX_SEQ  # 标记该通道已废
 
     def clear(self) -> None:
         with self._lock:
@@ -140,7 +178,15 @@ class QQReplyPool:
                 stale = [
                     mid
                     for mid, info in pool.items()
-                    if now - info["ts"] > _MSG_TTL or info["seq"] >= _MAX_SEQ
+                    if now - info["ts"] > _MSG_TTL
+                    or (
+                        info["seq"] >= _MAX_SEQ
+                        # 两条通道都耗尽才算废条目：event_id 仍有额度时保留
+                        and (
+                            not info.get("event_id")
+                            or info.get("event_seq", 0) >= _MAX_SEQ
+                        )
+                    )
                 ]
                 for mid in stale:
                     del pool[mid]

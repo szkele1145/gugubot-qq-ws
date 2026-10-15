@@ -4,9 +4,9 @@
 文档：https://bot.q.qq.com/wiki/develop/api-v2/
 
 要点：
-- 群聊发消息   POST /v2/groups/{group_openid}/messages   （msg_type=2 文本 / 3 富媒体）
+- 群聊发消息   POST /v2/groups/{group_openid}/messages   （msg_type=0 文本 / 7 富媒体）
 - 单聊发消息   POST /v2/users/{user_openid}/messages
-- 群富媒体     POST /v2/groups/{group_openid}/files → file_info → 发 msg_type=3
+- 群富媒体     POST /v2/groups/{group_openid}/files → file_info → 发 msg_type=7
 - 鉴权         Authorization: QQBot <access_token>；REST 需带 X-Union-Appid
 - 被动回复     body 中带 msg_id + msg_seq 即不受主动消息限额
 """
@@ -200,6 +200,11 @@ class QQOfficialClient:
             payload["msg_id"] = msg_id
             if msg_seq is not None:
                 payload["msg_seq"] = msg_seq
+        elif use_reply_pool:
+            # 与 send_group_message 对称：msg_id 通道无货时尝试 event_id
+            event_id = self._pool.take_event(group_openid)
+            if event_id:
+                payload["event_id"] = event_id
         return self._request("POST", f"/v2/groups/{group_openid}/messages", payload)
 
     def send_c2c_message(
@@ -220,6 +225,11 @@ class QQOfficialClient:
             payload["msg_id"] = msg_id
             if msg_seq is not None:
                 payload["msg_seq"] = msg_seq
+        else:
+            # 与群聊路径对称：msg_id 无货时尝试 event_id 备用通道
+            event_id = self._pool.take_event(f"c2c:{user_openid}")
+            if event_id:
+                payload["event_id"] = event_id
         return self._request("POST", f"/v2/users/{user_openid}/messages", payload)
 
     # ------------------------------------------------------------------ #
@@ -278,6 +288,11 @@ class QQOfficialClient:
             payload["msg_id"] = msg_id
             if msg_seq is not None:
                 payload["msg_seq"] = msg_seq
+        elif use_reply_pool:
+            # 与群聊富媒体路径对称：msg_id 无货时尝试 event_id
+            event_id = self._pool.take_event(f"c2c:{user_openid}")
+            if event_id:
+                payload["event_id"] = event_id
         return self._request("POST", f"/v2/users/{user_openid}/messages", payload)
 
     # ------------------------------------------------------------------ #
