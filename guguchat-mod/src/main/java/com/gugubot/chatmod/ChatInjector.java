@@ -119,9 +119,12 @@ public class ChatInjector {
     }
 
     /**
-     * 解析发送者 UUID：
+     * 解析发送者 UUID（三级降级）：
      * 1. 显示名与某在线玩家（游戏名）精确匹配 → 该玩家真实 UUID（最佳：档案齐全）
-     * 2. 否则确定性派生虚构 UUID（同一显示名永远相同）
+     * 2. 未匹配（QQ 昵称未绑定游戏名）→ 借用第一个在线玩家的 UUID：
+     *    客户端/AtomChat 有完整 PlayerInfo 档案 → 头像/名字样式正常渲染，
+     *    聊天头文本仍是传入的显示名（QQ 昵称），身份不混淆
+     * 3. 无人在线（理论不可达，inject 已保证非空）→ 稳定虚构 UUID
      */
     private static UUID resolveUuid(MinecraftServer srv, String displayName) {
         String target = displayName == null ? "" : displayName.trim();
@@ -132,6 +135,11 @@ public class ChatInjector {
                     return p.getGameProfile().getId();
                 }
             }
+        }
+        // 未绑定用户：借用第一个在线玩家档案（头像/渲染正常）
+        List<ServerPlayer> players = srv.getPlayerList().getPlayers();
+        if (!players.isEmpty()) {
+            return players.get(0).getGameProfile().getId();
         }
         return stableUuid(target);
     }
