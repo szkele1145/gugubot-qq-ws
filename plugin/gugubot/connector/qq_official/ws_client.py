@@ -457,6 +457,8 @@ class QQOfficialWSClient:
     def disconnect(self) -> None:
         self._stop_event.set()
         self._hb_stop.set()
+        # 代数递增：彻底退役所有心跳线程（与 connect 幂等清理对齐）
+        self._hb_generation += 1
         self._ready = False
         try:
             if self.ws:
