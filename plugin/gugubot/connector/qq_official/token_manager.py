@@ -53,7 +53,10 @@ class QQTokenManager:
         resp.raise_for_status()
         data = resp.json()
         token = data.get("access_token")
-        expire_in = int(data.get("expires_in", "7200"))
+        try:
+            expire_in = int(float(data.get("expires_in", 7200)))
+        except (TypeError, ValueError):
+            expire_in = 7200
         if not token:
             raise RuntimeError(f"获取 access_token 失败: {data}")
         return token, expire_in
