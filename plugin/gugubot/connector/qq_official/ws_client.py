@@ -254,7 +254,7 @@ class QQOfficialWSClient:
 
         op = data.get("op")
 
-        if op == OP_HELLO:  # 服务端 Hello：op:2
+        if op == OP_HELLO:  # 服务端 Hello：op:10
             raw_interval = (data.get("d") or {}).get("heartbeat_interval", 30000)
             # 异常数据兜底：0/负值会 wait(0) 空转风暴；超大值饿死心跳
             # 导致断连——夹到 1~300s（下限 1s 兼顾单测快速验证）
