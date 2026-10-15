@@ -106,6 +106,8 @@ class QQOfficialWSClient:
         self._hb_stop = threading.Event()
         self._hb_ack_miss = 0
         self._hb_generation = 0
+        # dispatch 回调签名探测结果（None=未探测；True=4参含 event_id；False=3参旧签名）
+        self._dispatch_is_4arg: Optional[bool] = None
         # 最近一次关闭码（4014 等鉴权类错误用长退避）
         self._last_close_code: Optional[int] = None
 
