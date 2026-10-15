@@ -107,12 +107,16 @@ class QQOfficialBot:
         被动回复 seq，把额度留给随后的文本消息。
         """
         api = self._c.api_client
+        # requests 是同步阻塞库——移到线程池执行，避免多图上传时
+        # 串行阻塞 MCDR 事件循环（每张图一次完整 REST 往返）
         if is_group:
-            api.send_group_media_message(
+            await asyncio.to_thread(
+                api.send_group_media_message,
                 openid, file_type, media_url, use_reply_pool=False
             )
         else:
-            api.send_c2c_media_message(
+            await asyncio.to_thread(
+                api.send_c2c_media_message,
                 openid, file_type, media_url, use_reply_pool=False
             )
 
@@ -580,6 +584,7 @@ class QQOfficialConnector(BasicConnector):
 
         首次调用**先取池**把结果（含 None）显式传递，杜绝 send_group_message
         内部二次取池；重试全程复用同一额度——绝不重复取池（每条仅 5 次）。
+        REST 为同步 requests——统一 to_thread 执行，不阻塞事件循环。
         """
         last_err: Optional[Exception] = None
         # 先取被动额度：有 → 显式传参；无 → event_id 通道（也只取一次）
@@ -591,13 +596,17 @@ class QQOfficialConnector(BasicConnector):
             try:
                 if taken:
                     mid, seq = taken
-                    return self.api_client.send_group_message(
+                    return await asyncio.to_thread(
+                        self.api_client.send_group_message,
                         group_openid, content, msg_id=mid, msg_seq=seq
                     )
                 if event_id:
-                    return self._request_group_with_event(group_openid, content, event_id)
+                    return await asyncio.to_thread(
+                        self._request_group_with_event, group_openid, content, event_id
+                    )
                 # msg_id 与 event_id 均无货：纯主动消息（显式请求，不取池）
-                return self.api_client._request(
+                return await asyncio.to_thread(
+                    self.api_client._request,
                     "POST",
                     f"/v2/groups/{group_openid}/messages",
                     {"msg_type": 0, "content": content},
@@ -628,13 +637,13 @@ class QQOfficialConnector(BasicConnector):
             try:
                 if taken:
                     mid, seq = taken
-                    return self.api_client.send_c2c_message(
+                    return await asyncio.to_thread(
+                        self.api_client.send_c2c_message,
                         user_openid, content, msg_id=mid, msg_seq=seq
                     )
-                # 池空：直接主动消息（send_c2c_message 内部不再取池的
-                # 场景——msg_id=None 时它只取一次池，此处已首取为 None，
-                # 传 None 会再取一次；显式绕过用底层请求）
-                return self.api_client._request(
+                # 池空：纯主动消息（显式请求，不取池；to_thread 不阻塞循环）
+                return await asyncio.to_thread(
+                    self.api_client._request,
                     "POST",
                     f"/v2/users/{user_openid}/messages",
                     {"msg_type": 0, "content": content},
