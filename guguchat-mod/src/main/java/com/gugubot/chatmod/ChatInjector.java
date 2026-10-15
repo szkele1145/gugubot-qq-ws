@@ -113,8 +113,10 @@ public class ChatInjector {
         STATS.lastMessage = "<" + displayName + "> " + (message.length() > 50 ? message.substring(0, 50) + "…" : message);
         STATS.lastAtMs = System.currentTimeMillis();
 
-        // 同时在服务端日志里打一份（MCDR 能看到，供其他插件/日志分析）
-        LOGGER.info("[GuguChat] <{}> {}", displayName, message);
+        // 同时在服务端日志里打一份（截断到 100 字符防 CICode 长标签刷屏；
+        // 完整内容在游戏内聊天与 /guguchat status 可见）
+        String logMsg = message.length() > 100 ? message.substring(0, 100) + "…" : message;
+        LOGGER.info("[GuguChat] <{}> {}", displayName, logMsg);
         return delivered;
     }
 
