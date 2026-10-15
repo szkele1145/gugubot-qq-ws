@@ -124,6 +124,9 @@ class QQOfficialWSClient:
         ):
             self._stop_event.set()
             self._hb_stop.set()
+            # 代数递增：即使 join 超时旧心跳线程未死，醒来也会因代数
+            # 过期立即退役（_hb_stop 随后会被 clear，不能只靠它）
+            self._hb_generation += 1
             try:
                 if self.ws:
                     self.ws.close()
