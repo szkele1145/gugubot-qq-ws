@@ -2,7 +2,7 @@
 
 GUGUBot 官方直连改造版的自动化测试（全部独立可跑，无需真实 QQ 账号）。
 
-运行方式（Windows，Python 3.12+，需 `pip install ruamel.yaml websocket-client requests mcstatus`）：
+运行方式（Windows，Python 3.11+ / 3.14 验证通过，需 `pip install ruamel.yaml websocket-client requests mcstatus`）：
 
 ```powershell
 $env:PYTHONIOENCODING = "utf-8"
