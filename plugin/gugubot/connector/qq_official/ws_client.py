@@ -336,11 +336,23 @@ class QQOfficialWSClient:
 
         if self._on_dispatch:
             try:
-                # 事件外层 id（event_id）一并传递：备用被动回复通道
-                # （兼容 3 参回调：TypeError 时按旧签名重试）
-                try:
+                # 事件外层 id（event_id）一并传递：备用被动回复通道。
+                # 签名探测一次性完成：首个事件测试 4 参调用，TypeError
+                # 则判定旧签名并记住，此后不再重复试探（避免回调内部
+                # 业务 TypeError 被误判成签名问题导致事件重复处理）。
+                if getattr(self, "_dispatch_is_4arg", None) is None:
+                    try:
+                        self._on_dispatch(event_type, seq, payload, data.get("id", ""))
+                        self._dispatch_is_4arg = True
+                        return
+                    except TypeError as te:
+                        # 区分：旧签名（缺第 4 参）vs 回调内部错误
+                        if "argument" not in str(te) and "positional" not in str(te):
+                            raise  # 业务 TypeError：向上抛，不重试
+                        self._dispatch_is_4arg = False
+                if self._dispatch_is_4arg:
                     self._on_dispatch(event_type, seq, payload, data.get("id", ""))
-                except TypeError:
+                else:
                     self._on_dispatch(event_type, seq, payload)
             except Exception as e:
                 if self._logger:
