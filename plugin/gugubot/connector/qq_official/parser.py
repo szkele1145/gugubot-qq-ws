@@ -25,6 +25,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 from typing import Optional
 
@@ -209,7 +210,7 @@ class QQOfficialParser(BasicParser):
         content = data.get("content", "") or ""
 
         # 富媒体附件 → image/record/video 段
-        segments = self._build_segments("", data.get("attachments"))
+        segments = await self._build_segments("", data.get("attachments"))
 
         # @用户标记原位展开为 at 段（保留消息中的位置语义）；
         # @机器人自身的标记剔除。mentions 提供用户名映射。
@@ -303,7 +304,7 @@ class QQOfficialParser(BasicParser):
 
         # @标记原位展开为 at 段（与群消息一致）
         bot_official_id = str(getattr(self.connector.bot, "self_id", "") or "")
-        segments = self._build_segments("", data.get("attachments"))
+        segments = await self._build_segments("", data.get("attachments"))
         segments.extend(
             self._expand_content_segments(
                 content, id_mapper, {}, bot_official_id
@@ -419,12 +420,13 @@ class QQOfficialParser(BasicParser):
         )
         return str(legacy_group) in [str(g) for g in admin_groups if g]
 
-    def _build_segments(self, content: str, attachments: Optional[list]) -> list:
+    async def _build_segments(self, content: str, attachments: Optional[list]) -> list:
         """把官方 content + attachments 合成 OneBot array 消息段。
 
         图片/视频/语音附件：官方 CDN url 有时效（约 30 分钟），这里立即
         下载到插件数据目录缓存（除非配置关闭），转成本地 file:// 路径，
         供 ChatImage/ImagePreview 稳定渲染；同时保留 url 便于点击预览。
+        下载经 to_thread 执行——CDN 下载 20s 超时不阻塞事件循环。
         """
         segments = []
         if content:
@@ -441,8 +443,10 @@ class QQOfficialParser(BasicParser):
             if summary:
                 file_data["summary"] = summary
 
-            # 下载附件到本地缓存（ChatImage 用本地文件最稳）
-            local = self._cache_attachment(url, filename, content_type)
+            # 下载附件到本地缓存（ChatImage 用本地文件最稳；线程池执行）
+            local = await asyncio.to_thread(
+                self._cache_attachment, url, filename, content_type
+            )
             if local:
                 file_data["file"] = local
 
