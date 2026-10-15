@@ -207,7 +207,7 @@ event_data = {
     "attachments": [],
 }
 task = {"_event_name": "GROUP_AT_MESSAGE_CREATE", "_data": event_data}
-info = asyncio.get_event_loop().run_until_complete(p.parse(task))
+info = asyncio.new_event_loop().run_until_complete(p.parse(task))
 
 assert info is not None, "群消息应被解析"
 assert info.source_id == "123456", f"source_id 应为绑定群号: {info.source_id}"
@@ -228,7 +228,7 @@ event_data2 = {
     "author": {"member_openid": "OPENID_USER_Y"},
 }
 task2 = {"_event_name": "GROUP_AT_MESSAGE_CREATE", "_data": event_data2}
-info2 = asyncio.get_event_loop().run_until_complete(p.parse(task2))
+info2 = asyncio.new_event_loop().run_until_complete(p.parse(task2))
 # 未知群没有可绑定槽位（配置只登记了2个群，都被占用）→ 虚拟群号，不在监听列表 → None
 assert info2 is None, f"未监听群应返回 None"
 print("PASS: parser 拒绝未监听群")
@@ -240,7 +240,7 @@ c2c_data = {
     "content": "你好",
 }
 task3 = {"_event_name": "C2C_MESSAGE_CREATE", "_data": c2c_data}
-info3 = asyncio.get_event_loop().run_until_complete(p.parse(task3))
+info3 = asyncio.new_event_loop().run_until_complete(p.parse(task3))
 assert info3 is not None and info3.event_sub_type == "private"
 assert info3.sender_id == u1
 mid, seq = pool.take("c2c:OPENID_USER_X")
