@@ -269,9 +269,13 @@ class QQOfficialWSClient:
             else:
                 self._send_identify()
             self._start_heartbeat()
-
         elif op == OP_DISPATCH:  # 事件
-            self._handle_dispatch(data)
+            try:
+                self._handle_dispatch(data)
+            except Exception as e:
+                # 鉴权/解析异常不应杀死 WS 读循环；记录后由服务端超时踢触发重连
+                if self._logger:
+                    self._logger.error(f"[QQ官方] Dispatch 处理异常: {e}\n{traceback.format_exc()}")
 
         elif op == OP_HEARTBEAT_ACK:
             self._hb_ack_miss = 0
