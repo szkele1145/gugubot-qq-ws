@@ -54,6 +54,10 @@ class QQIDMapper:
         # 合并写状态
         self._flush_pending = False
 
+        # 运行期临时状态（不持久化，实例隔离）
+        self._pending_legacy_groups: list = []
+        self._legacy_group_order: list = []
+
         if self._data_file is not None:
             self._load()
 
@@ -231,10 +235,6 @@ class QQIDMapper:
             self._pending_legacy_groups = pending
             self._legacy_group_order = order
             self._save()
-
-    # 运行期临时状态（不持久化）
-    _pending_legacy_groups = None
-    _legacy_group_order = None
 
     def bind_group_openid(self, group_openid: str) -> Optional[str]:
         """把一个 group_openid 绑定到配置中的真实群号。

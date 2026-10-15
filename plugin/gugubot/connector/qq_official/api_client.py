@@ -65,7 +65,7 @@ class QQOfficialClient:
     def _headers(self) -> dict:
         headers = self._token.auth_header()
         headers["Content-Type"] = "application/json"
-        headers["X-Union-Appid"] = self._token._appid
+        headers["X-Union-Appid"] = self._token.appid
         return headers
 
     def _request(

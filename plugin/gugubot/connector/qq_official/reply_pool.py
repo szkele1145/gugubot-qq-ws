@@ -79,8 +79,11 @@ class QQReplyPool:
             for msg_id in reversed(pool):
                 info = pool[msg_id]
                 if now - info["ts"] > _MSG_TTL:
-                    # 新到旧遍历，第一条过期则更旧的必然全过期 → 停止
-                    to_drop.extend(pool.keys())  # 过期项一并回收
+                    # 新到旧遍历，第一条过期则更旧的必然全过期 →
+                    # 当前及更旧的条目一并回收（不误删尚未遍历到的更新条目）
+                    keys = list(pool.keys())
+                    idx = keys.index(msg_id)
+                    to_drop.extend(keys[idx:])
                     break
                 if info["seq"] >= _MAX_SEQ:
                     # msg_id 额度用尽：若 event_id 还有额度则保留条目

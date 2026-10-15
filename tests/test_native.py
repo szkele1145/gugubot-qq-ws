@@ -116,7 +116,7 @@ async def run():
 asyncio.run(run())
 assert len(EXECUTED) == 1, EXECUTED
 cmd = EXECUTED[0]
-print("CMD:", cmd)
+print("CMD:", repr(cmd))  # repr 对非 ASCII 转义，避免 gbk 控制台 UnicodeEncodeError
 
 import json as _json
 

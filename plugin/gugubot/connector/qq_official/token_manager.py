@@ -37,6 +37,10 @@ class QQTokenManager:
     def configured(self) -> bool:
         return bool(self._appid and self._secret)
 
+    @property
+    def appid(self) -> str:
+        return self._appid
+
     def invalidate(self) -> None:
         """强制下次重新获取。"""
         with self._lock:
