@@ -47,16 +47,20 @@ class QQOfficialAPIError(RuntimeError):
 class QQOfficialClient:
     """QQ 官方 REST API 客户端（线程安全）。"""
 
+    DEFAULT_TIMEOUT = 15  # 秒；可通过构造参数 timeout 覆盖
+
     def __init__(
         self,
         token_manager: QQTokenManager,
         reply_pool: QQReplyPool,
         logger=None,
+        timeout: Optional[int] = None,
     ) -> None:
         self._token = token_manager
         self._pool = reply_pool
         self._logger = logger
         self._seq_lock = threading.Lock()
+        self._timeout = timeout if timeout is not None else self.DEFAULT_TIMEOUT
 
     # ------------------------------------------------------------------ #
     # 基础请求
@@ -82,6 +86,7 @@ class QQOfficialClient:
         - 401/403：token 失效自动刷新重试一次
         - 网络异常（超时/连接失败）：短暂退避重试一次（幂等的读操作
           与消息发送均安全——官方按 msg_id+msg_seq 去重）
+        - 429：流量限制，不刷新 token、不重试，直接抛出交由上层降级
         """
         try:
             resp = requests.request(
@@ -90,17 +95,26 @@ class QQOfficialClient:
                 json=payload,
                 params=params,
                 headers=self._headers(),
-                timeout=15,
+                timeout=self._timeout,
             )
         except requests.RequestException as e:
             if _net_attempt < 1:
-                import time as _t
-                _t.sleep(1)
+                time.sleep(1)
                 return self._request(
                     method, path, payload, params,
                     retry_on_auth=retry_on_auth, _net_attempt=_net_attempt + 1,
                 )
             raise QQOfficialAPIError(0, 0, f"网络异常: {e}") from e
+
+        # 429 流量限制：不刷新 token、不重试，事件级直接抛出，
+        # 避免把限流误判为 token 失效导致无效刷新。
+        if resp.status_code == 429:
+            if self._logger:
+                self._logger.warning(
+                    f"[QQ官方API] 触发 429 流量限制 {path}，直接失败不重试"
+                )
+            trace_id = resp.headers.get("X-Tps-Trace-Id", "")
+            raise QQOfficialAPIError(429, 42900, "触发流量限制（429）", trace_id)
 
         # token 失效自动重试一次
         if resp.status_code in (401, 403) and retry_on_auth:

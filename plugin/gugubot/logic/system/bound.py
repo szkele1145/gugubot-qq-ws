@@ -822,7 +822,7 @@ class BoundSystem(BasicSystem):
         # 获取所有绑定的玩家名
         bound_players = []
         for platform, accounts in player.accounts.items():
-            if platform == "qq":
+            if str(platform).lower() == "qq":
                 continue
             bound_players.extend(accounts)
 
