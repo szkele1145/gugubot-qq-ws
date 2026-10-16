@@ -40,7 +40,12 @@ class PluginCommandSystem(BasicSystem):
             return False
 
         message = broadcast_info.message
-        content = message[0].get("data", {}).get("text", "")
+        # QQ 官方 @机器人 时 at 段可能占 index 0；拼接全部文本段后再解析命令。
+        content = "".join(
+            seg.get("data", {}).get("text", "")
+            for seg in message
+            if seg.get("type") == "text"
+        ).strip()
         prefix = self.api.command_prefix
         if not content.startswith(prefix):
             return False

@@ -56,7 +56,12 @@ class OfficialStatusSystem(BasicSystem):
         message = broadcast_info.message
         if not message:
             return False
-        content = message[0].get("data", {}).get("text", "")
+        # QQ 官方 @机器人 时 at 段可能占 index 0；拼接全部文本段后再解析命令。
+        content = "".join(
+            seg.get("data", {}).get("text", "")
+            for seg in message
+            if seg.get("type") == "text"
+        ).strip()
         prefix = self.config.get_keys(["GUGUBot", "command_prefix"], "#")
         rest = content[len(prefix):].strip() if content.startswith(prefix) else ""
 

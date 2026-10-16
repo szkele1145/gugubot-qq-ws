@@ -60,10 +60,16 @@ class GeneralHelpSystem(BasicSystem):
             return False
 
         first_message = message[0]
-        if first_message.get("type") != "text":
+        # QQ 官方 @机器人 时消息段首位可能是 at 段，text 段不必然在 index 0；
+        # 须拼接全部 type=="text" 段后再做前缀/命令解析（同 player_list.py 已修）。
+        content = "".join(
+            seg.get("data", {}).get("text", "")
+            for seg in message
+            if seg.get("type") == "text"
+        ).strip()
+        if not content:
             return False
 
-        content = first_message.get("data", {}).get("text", "").strip()
         command_prefix = self.config.get("GUGUBot", {}).get("command_prefix", "#")
 
         # 检查是否是帮助命令
@@ -103,6 +109,10 @@ class GeneralHelpSystem(BasicSystem):
         inactive_check_name = self.server.tr("gugubot.system.inactive_check.name")
         vote_name = self.server.tr("gugubot.system.vote.name")
 
+        # 官方直连专用命令（仅在 QQ 官方连接器下可用）
+        official_status_cmd = "#状态 / #status"
+        whoami_cmd = "#我是谁 / #whoami"
+
         # 根据是否是管理员显示不同的帮助信息
         if is_admin:
             help_msg = self.get_tr(
@@ -128,6 +138,8 @@ class GeneralHelpSystem(BasicSystem):
                 vote=vote_name,
                 unbound_check=unbound_check_name,
                 inactive_check=inactive_check_name,
+                official_status=official_status_cmd,
+                whoami=whoami_cmd,
             )
         else:
             help_msg = self.get_tr(
@@ -143,6 +155,7 @@ class GeneralHelpSystem(BasicSystem):
                 style=style_name,
                 todo=todo_name,
                 vote=vote_name,
+                whoami=whoami_cmd,
             )
 
         await self.reply(broadcast_info, [MessageBuilder.text(help_msg)])
