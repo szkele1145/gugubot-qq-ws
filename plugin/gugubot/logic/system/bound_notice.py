@@ -74,10 +74,18 @@ class BoundNoticeSystem(BasicSystem):
             admin_group_ids = self.config.get_keys(
                 ["connector", "QQ", "permissions", "admin_group_ids"], []
             )
-            if str(broadcast_info.source_id) in [
-                str(gid) for gid in admin_group_ids if gid
-            ]:
-                return False
+            qq_connector = self.system_manager.connector_manager.get_connector("QQ")
+            id_mapper = qq_connector.id_mapper if qq_connector else None
+            if id_mapper:
+                # source_id 是虚拟群号，admin_group_ids 是配置里的真实群号；
+                # 统一翻成 group_openid 后再比对，避免虚实号混叠
+                source_openid = id_mapper.to_official_group(broadcast_info.source_id)
+                admin_openids = [
+                    id_mapper.to_official_group(str(gid))
+                    for gid in admin_group_ids if gid
+                ]
+                if source_openid in admin_openids:
+                    return False
 
         # 检查玩家是否在玩家管理器中
         player = self.bound_system.player_manager.get_player(

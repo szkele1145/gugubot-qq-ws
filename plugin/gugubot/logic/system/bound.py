@@ -358,11 +358,12 @@ class BoundSystem(BasicSystem):
                 if platform == "QQ" and self.config.get_keys(
                     ["connector", "QQ", "others", "change_group_card"], True
                 ):
-                    await self.system_manager.connector_manager.get_connector(
+                    qq_connector = self.system_manager.connector_manager.get_connector(
                         "QQ"
-                    ).bot.set_group_card(
+                    )
+                    await qq_connector.bot.set_group_card(
                         group_id=int(broadcast_info.source_id),
-                        user_id=int(target_id),
+                        user_id=qq_connector.id_mapper.to_official_user(target_id),
                         card=player_name,
                     )
 
@@ -483,7 +484,9 @@ class BoundSystem(BasicSystem):
 
     async def _unbind_bedrock_only(self, broadcast_info: BroadcastInfo) -> bool:
         """解绑当前用户的所有基岩版玩家名"""
-        player = self.player_manager.get_player(broadcast_info.sender_id)
+        player = self.player_manager.get_player(
+            broadcast_info.sender_id, platform=broadcast_info.source.origin
+        )
         if not player:
             await self.reply(
                 broadcast_info, [MessageBuilder.text(self.get_tr("no_bindings"))]

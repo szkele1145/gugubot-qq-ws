@@ -144,7 +144,13 @@ class PlayerListSystem(BasicSystem):
         if not message or message[0].get("type") != "text":
             return False
 
-        content = message[0].get("data", {}).get("text", "").strip()
+        # 提取所有文本段并拼接：QQ official 消息可能以 at 段开头，
+        # message[0] 不一定是 text，否则命令会被静默忽略
+        text_parts = []
+        for seg in message:
+            if seg.get("type") == "text":
+                text_parts.append(seg.get("data", {}).get("text", ""))
+        content = "".join(text_parts).strip()
         command_prefix = self.config.get("GUGUBot", {}).get("command_prefix", "#")
 
         command = content.replace(command_prefix, "", 1).strip()
