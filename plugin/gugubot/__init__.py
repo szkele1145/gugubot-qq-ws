@@ -35,6 +35,7 @@ from gugubot.logic.system import (
     ExecuteSystem,
     GeneralHelpSystem,
     KeyWordSystem,
+    ConfigCheckSystem,
     OfficialStatusSystem,
     PlayerListSystem,
     PluginCommandSystem,
@@ -228,6 +229,12 @@ async def on_load(server: PluginServerInterface, _) -> None:
         connector_manager=connector_manager, config=gugubot_config
     )
     systems.insert(len(systems) - 1, official_status_system)
+
+    # 配置热校验系统（#配置检验 / #config check；管理员专用）
+    config_check_system = ConfigCheckSystem(
+        connector_manager=connector_manager, config=gugubot_config
+    )
+    systems.insert(len(systems) - 1, config_check_system)
 
     for system in systems:
         system_manager.register_system(system)

@@ -170,6 +170,9 @@ system:
       - 2854196310 # Q群管家
       - # QQ号2
 
+  config_check: # 配置语法检查 (#config)
+    enable: true
+
   echo: # 转发系统
     enable: true
 

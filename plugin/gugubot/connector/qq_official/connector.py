@@ -57,10 +57,16 @@ from gugubot.connector.qq_official.ws_client import (
 from gugubot.utils.message import extract_images, segments_to_plain_text
 from gugubot.utils.types import ProcessedInfo
 
+# 模块级预编译（与 OneBot connector 的正则/flag 完全一致，语义不变）
+_COLOR_CODE_PATTERN = re.compile(r"§[0-9a-fk-or]", re.IGNORECASE)
+
 
 def strip_minecraft_color_codes(text: str) -> str:
-    """去掉 MC 颜色代码（与 OneBot connector 保持一致）。"""
-    return re.sub(r"§[0-9a-fk-or]", "", text, flags=re.IGNORECASE)
+    """去掉 MC 颜色代码（与 OneBot connector 保持一致）。
+
+    使用模块级预编译正则，省掉每次调用时 ``re.sub`` 的模式缓存查找。
+    """
+    return _COLOR_CODE_PATTERN.sub("", text)
 
 
 class QQOfficialBot:

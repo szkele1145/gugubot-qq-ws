@@ -80,10 +80,13 @@ class QQReplyPool:
                 info = pool[msg_id]
                 if now - info["ts"] > _MSG_TTL:
                     # 新到旧遍历，第一条过期则更旧的必然全过期 →
-                    # 当前及更旧的条目一并回收（不误删尚未遍历到的更新条目）
+                    # 当前及更旧的条目一并回收（不误删尚未遍历到的更新条目）。
+                    # keys 是「旧→新」插入序，当前条目及其之前（更旧）的才是
+                    # 过期项，故取 keys[:idx+1]；取 keys[idx:] 会把尚未遍历到的
+                    # 更新条目（含仍有 event 额度的）一并误删。
                     keys = list(pool.keys())
                     idx = keys.index(msg_id)
-                    to_drop.extend(keys[idx:])
+                    to_drop.extend(keys[: idx + 1])
                     break
                 if info["seq"] >= _MAX_SEQ:
                     # msg_id 额度用尽：若 event_id 还有额度则保留条目

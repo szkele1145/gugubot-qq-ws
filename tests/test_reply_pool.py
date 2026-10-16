@@ -118,6 +118,22 @@ def test_expired_entries_swept():
     print("PASS: 过期条目被回收")
 
 
+def test_take_ttl_deletes_expired_newest_entry():
+    """take() 扫描从最新条目开始；若最新条目已过期，必须把该条目本身
+    及其之前的条目一并清理（keys[:idx+1]，而非误写成 keys[:idx] 或 keys[idx:]）。
+
+    回归：slice 边界错一会导致过期条目残留，或把尚未过期的旧条目连带误删。
+    """
+    p = QQReplyPool(None)
+    old = time.time() - 10_000
+    p.add(G, "OLDER")     # index 0，未过期
+    p.add(G, "EXPIRED")   # index 1，最新，已过期
+    p._pools[G]["EXPIRED"]["ts"] = old
+    assert p.take(G) is None
+    assert p.size(G) == 0, f"过期条目及其之前条目应全部清理，还剩 {p.size(G)}"
+    print("PASS: take() 遇到过期条目时连同更早条目一并清理")
+
+
 def test_cleanup_keeps_event_only_entries():
     """cleanup 的淘汰判据必须与 take 一致：两条通道都耗尽才删。"""
     p = QQReplyPool(None)

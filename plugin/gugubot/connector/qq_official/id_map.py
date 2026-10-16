@@ -151,13 +151,14 @@ class QQIDMapper:
         if not openid:
             return ""
         with self._lock:
-            if openid not in self._user_map:
+            user_map = self._user_map
+            if openid not in user_map:
                 legacy = str(self._next_user)
                 self._next_user += 1
-                self._user_map[openid] = legacy
+                user_map[openid] = legacy
                 self._user_rev[legacy] = openid
                 self._save()
-            return self._user_map[openid]
+            return user_map[openid]
 
     def user_openid(self, legacy_id: str) -> str:
         """虚拟用户号 → openid（未知则原样返回）。"""
@@ -178,13 +179,14 @@ class QQIDMapper:
         if not openid:
             return ""
         with self._lock:
-            if openid not in self._group_map:
+            group_map = self._group_map
+            if openid not in group_map:
                 legacy = str(self._next_group)
                 self._next_group += 1
-                self._group_map[openid] = legacy
+                group_map[openid] = legacy
                 self._group_rev[legacy] = openid
                 self._save()
-            return self._group_map[openid]
+            return group_map[openid]
 
     def group_openid(self, legacy_id: str) -> str:
         """虚拟群号 → group_openid（未知则原样返回）。"""

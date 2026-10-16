@@ -61,6 +61,8 @@ class QQOfficialClient:
         self._logger = logger
         self._seq_lock = threading.Lock()
         self._timeout = timeout if timeout is not None else self.DEFAULT_TIMEOUT
+        # 复用 HTTP 会话（连接池），避免每次请求重新建立 TCP 握手与 TLS
+        self._session = requests.Session()
 
     # ------------------------------------------------------------------ #
     # 基础请求
@@ -89,7 +91,7 @@ class QQOfficialClient:
         - 429：流量限制，不刷新 token、不重试，直接抛出交由上层降级
         """
         try:
-            resp = requests.request(
+            resp = self._session.request(
                 method,
                 _API_BASE + path,
                 json=payload,

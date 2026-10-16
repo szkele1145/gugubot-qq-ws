@@ -32,6 +32,8 @@ class QQTokenManager:
         self._lock = threading.Lock()
         self._token: Optional[str] = None
         self._expires_at: float = 0.0
+        # 复用 HTTP 会话（连接池），避免每次刷新 token 都重新建立 TLS
+        self._session = requests.Session()
 
     @property
     def configured(self) -> bool:
@@ -49,7 +51,7 @@ class QQTokenManager:
 
     def _fetch(self) -> tuple:
         """请求新 token。返回 (token, expire_in_seconds)。"""
-        resp = requests.post(
+        resp = self._session.post(
             _TOKEN_URL,
             json={"appId": self._appid, "clientSecret": self._secret},
             timeout=10,
@@ -74,14 +76,15 @@ class QQTokenManager:
             if self._token and time.time() < self._expires_at:
                 return self._token
 
+            logger = self._logger
             last_err: Optional[Exception] = None
             for attempt in range(2):
                 try:
                     token, expire_in = self._fetch()
                     self._token = token
                     self._expires_at = time.time() + max(expire_in - _EXPIRE_MARGIN, 60)
-                    if self._logger:
-                        self._logger.debug("[QQ官方] access_token 已刷新")
+                    if logger:
+                        logger.debug("[QQ官方] access_token 已刷新")
                     return token
                 except Exception as e:
                     last_err = e

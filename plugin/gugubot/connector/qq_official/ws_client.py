@@ -173,12 +173,14 @@ class QQOfficialWSClient:
         客户端换新地址（负载均衡调度）；固定旧地址可能反复命中故障节点。
         """
         backoff = 3
-        while not self._stop_event.is_set():
+        stop = self._stop_event
+        logger = self._logger
+        while not stop.is_set():
             if self._last_close_code == 4014:
                 # 能力未开通：重连必被拒，长退避等用户修配置/权限
-                if self._logger:
-                    self._logger.info("[QQ官方] 60s 后重试（等待开通能力/修改配置）")
-                self._stop_event.wait(60)
+                if logger:
+                    logger.info("[QQ官方] 60s 后重试（等待开通能力/修改配置）")
+                stop.wait(60)
                 continue
             try:
                 # 重连（非首次）时刷新网关地址
@@ -194,14 +196,14 @@ class QQOfficialWSClient:
                 self.ws.run_forever()
                 backoff = 3  # 连接成功过则重置退避
             except Exception as e:
-                if self._logger:
-                    self._logger.error(f"[QQ官方] WS 运行异常: {e}\n{traceback.format_exc()}")
-            if self._stop_event.is_set():
+                if logger:
+                    logger.error(f"[QQ官方] WS 运行异常: {e}\n{traceback.format_exc()}")
+            if stop.is_set():
                 return
             # on_close 里已打印；这里仅负责退避重连
-            if self._logger:
-                self._logger.info(f"[QQ官方] {backoff}s 后重新连接")
-            self._stop_event.wait(backoff)
+            if logger:
+                logger.info(f"[QQ官方] {backoff}s 后重新连接")
+            stop.wait(backoff)
             backoff = min(backoff * 2, 60)
 
     # ------------------------------------------------------------------ #
@@ -248,11 +250,13 @@ class QQOfficialWSClient:
         try:
             data = json.loads(raw)
         except (ValueError, TypeError):
-            if self._logger:
-                self._logger.warning(f"[QQ官方] 收到非 JSON 消息: {raw[:200]}")
+            logger = self._logger
+            if logger:
+                logger.warning(f"[QQ官方] 收到非 JSON 消息: {raw[:200]}")
             return
 
         op = data.get("op")
+        logger = self._logger
 
         if op == OP_HELLO:  # 服务端 Hello：op:10
             raw_interval = (data.get("d") or {}).get("heartbeat_interval", 30000)
@@ -262,10 +266,8 @@ class QQOfficialWSClient:
                 self._heartbeat_interval = min(max(float(raw_interval) / 1000.0, 1.0), 300.0)
             except (TypeError, ValueError):
                 self._heartbeat_interval = 30.0
-            if self._logger:
-                self._logger.info(
-                    f"[QQ官方] 收到 Hello，心跳间隔 {self._heartbeat_interval}s"
-                )
+            if logger:
+                logger.info(f"[QQ官方] 收到 Hello，心跳间隔 {self._heartbeat_interval}s")
             if self.session_id:
                 self._send_resume()
             else:
@@ -276,35 +278,35 @@ class QQOfficialWSClient:
                 self._handle_dispatch(data)
             except Exception as e:
                 # 鉴权/解析异常不应杀死 WS 读循环；记录后由服务端超时踢触发重连
-                if self._logger:
-                    self._logger.error(f"[QQ官方] Dispatch 处理异常: {e}\n{traceback.format_exc()}")
+                if logger:
+                    logger.error(f"[QQ官方] Dispatch 处理异常: {e}\n{traceback.format_exc()}")
 
         elif op == OP_HEARTBEAT_ACK:
             self._hb_ack_miss = 0
-            if self._logger:
-                self._logger.debug("[QQ官方] 心跳 ACK")
+            if logger:
+                logger.debug("[QQ官方] 心跳 ACK")
 
         elif op == OP_RECONNECT:
-            if self._logger:
-                self._logger.warning("[QQ官方] 服务端要求重连（op:7）")
+            if logger:
+                logger.warning("[QQ官方] 服务端要求重连（op:7）")
             self._schedule_reconnect()
 
         elif op == OP_INVALID_SESSION:
             # 官方规范：d=false → resume 被拒，需全新 Identify；d=true 可重试 resume
             d_val = data.get("d")
             if d_val is False:
-                if self._logger:
-                    self._logger.warning("[QQ官方] 会话失效（op:9 d=false），清除会话重新鉴权")
+                if logger:
+                    logger.warning("[QQ官方] 会话失效（op:9 d=false），清除会话重新鉴权")
                 self.session_id = None
                 self.last_seq = None
             else:
-                if self._logger:
-                    self._logger.warning("[QQ官方] 会话失效（op:9），稍后重试 Resume")
+                if logger:
+                    logger.warning("[QQ官方] 会话失效（op:9），稍后重试 Resume")
                 # 保留 session_id/last_seq，等下一个 Hello 时 _send_resume 重试
 
         else:
-            if self._logger:
-                self._logger.debug(f"[QQ官方] 未知 op:{op} 消息: {str(data)[:200]}")
+            if logger:
+                logger.debug(f"[QQ官方] 未知 op:{op} 消息: {str(data)[:200]}")
 
     def _handle_dispatch(self, data: dict) -> None:
         seq = data.get("s")
@@ -374,9 +376,11 @@ class QQOfficialWSClient:
 
     def _send_json(self, payload: dict) -> bool:
         with self._send_lock:
-            if self.ws and self.ws.sock and self.ws.sock.connected:
+            ws = self.ws
+            sock = ws.sock if ws else None
+            if sock and sock.connected:
                 try:
-                    self.ws.send(json.dumps(payload))
+                    ws.send(json.dumps(payload))
                     return True
                 except Exception as e:
                     if self._logger:
@@ -430,22 +434,31 @@ class QQOfficialWSClient:
         self._hb_ack_miss = 0
 
         def _beat(gen=gen):
-            while not self._stop_event.is_set():
+            # 闭包缓存：心跳为热路径（每隔 interval 秒执行一次），
+            # 将稳定对象/方法缓为局部变量，避免每次循环的属性查找。
+            stop = self._stop_event
+            hb_stop = self._hb_stop
+            interval = self._heartbeat_interval
+            pool = self._pool
+            logger = self._logger
+            send_json = self._send_json
+
+            while not stop.is_set():
                 # 代数过期（新连接已建立新心跳）→ 本线程立即退役
                 if gen != self._hb_generation:
                     return
-                if self._hb_stop.wait(self._heartbeat_interval):
+                if hb_stop.wait(interval):
                     return
-                if self._stop_event.is_set() or gen != self._hb_generation:
+                if stop.is_set() or gen != self._hb_generation:
                     return
                 # 顺带清理回复池过期条目（零成本防内存增长）
                 try:
-                    self._pool.cleanup()
+                    pool.cleanup()
                 except Exception:
                     pass
-                ok = self._send_json({"op": OP_HEARTBEAT, "d": self.last_seq})
-                if not ok and self._logger:
-                    self._logger.warning("[QQ官方] 心跳发送失败，连接可能已断开")
+                ok = send_json({"op": OP_HEARTBEAT, "d": self.last_seq})
+                if not ok and logger:
+                    logger.warning("[QQ官方] 心跳发送失败，连接可能已断开")
                     continue
                 # 发送成功但连续 2 次无 ACK → 判死链路，主动断开触发重连
                 self._hb_ack_miss += 1

@@ -26,8 +26,15 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import mimetypes
+import os
 import re
-from typing import Optional
+import time
+from pathlib import Path
+from typing import Iterable, Optional
+
+import requests
 
 from gugubot.parser.basic_parser import BasicParser
 from gugubot.utils.types import BroadcastInfo, Source
@@ -48,6 +55,31 @@ def _clean_official_content(text: str) -> str:
     return text
 
 
+def _id_in(sender_id, ids: Optional[Iterable]) -> bool:
+    """配置号列表的成员判断（不预建临时列表，逐项短路比较）。
+
+    等价于 ``str(sender_id) in [str(i) for i in ids if i]``，但省掉了每次
+    调用都新建一个列表的开销。列表通常只有个位数，短路比较比 set 更快。
+    """
+    if not ids:
+        return False
+    target = str(sender_id)
+    for i in ids:
+        if i and str(i) == target:
+            return True
+    return False
+
+
+def _has_ids(ids: Optional[Iterable]) -> bool:
+    """配置号列表里是否存在有效（非空）项。"""
+    if not ids:
+        return False
+    for i in ids:
+        if i:
+            return True
+    return False
+
+
 class QQOfficialParser(BasicParser):
     """QQ 官方平台事件解析器。"""
 
@@ -55,15 +87,16 @@ class QQOfficialParser(BasicParser):
         """检查是否是管理员（sender_id 已是虚拟号）。"""
         config = self.connector.config
         admin_ids = config.get_keys(["connector", "QQ", "permissions", "admin_ids"], [])
-        admin_groups = config.get_keys(
-            ["connector", "QQ", "permissions", "admin_group_ids"], []
-        )
-        if str(sender_id) in [str(i) for i in admin_ids if i]:
+        if _id_in(sender_id, admin_ids):
             return True
         # 官方平台没有"管理员"概念，管理群内所有人可用
         source_id = getattr(self, "_current_source_id", None)
-        if source_id and str(source_id) in [str(g) for g in admin_groups if g]:
-            return True
+        if source_id:
+            admin_groups = config.get_keys(
+                ["connector", "QQ", "permissions", "admin_group_ids"], []
+            )
+            if _id_in(source_id, admin_groups):
+                return True
         return False
 
     async def _should_exclude_user(self, user_id: str) -> bool:
@@ -71,9 +104,7 @@ class QQOfficialParser(BasicParser):
         exclude_ids = self.connector.config.get_keys(
             ["system", "bound_notice", "exclude_ids"], []
         )
-        if user_id in [str(i) for i in exclude_ids if i]:
-            return True
-        return False
+        return _id_in(user_id, exclude_ids)
 
     async def parse(self, raw_message) -> Optional[BroadcastInfo]:
         """解析官方 WS 推送的 Dispatch 事件（connector 包装后的任务 dict）。
@@ -407,18 +438,17 @@ class QQOfficialParser(BasicParser):
         admin_groups = config.get_keys(
             ["connector", "QQ", "permissions", "admin_group_ids"], []
         )
-        valid = {str(g) for g in (group_ids + admin_groups) if g}
-        if not valid:
+        if not _has_ids(group_ids) and not _has_ids(admin_groups):
             # 宽松模式：没配置群号时，凡是有映射（真实绑定或虚拟分配）的群都放行
             return bool(legacy_group)
-        return str(legacy_group) in valid
+        return _id_in(legacy_group, group_ids) or _id_in(legacy_group, admin_groups)
 
     def _is_admin_group(self, legacy_group: str) -> bool:
         config = self.connector.config
         admin_groups = config.get_keys(
             ["connector", "QQ", "permissions", "admin_group_ids"], []
         )
-        return str(legacy_group) in [str(g) for g in admin_groups if g]
+        return _id_in(legacy_group, admin_groups)
 
     async def _build_segments(self, content: str, attachments: Optional[list]) -> list:
         """把官方 content + attachments 合成 OneBot array 消息段。
@@ -501,17 +531,11 @@ class QQOfficialParser(BasicParser):
         if not cache_enabled:
             return None
         try:
-            import hashlib
-            import mimetypes
-            import time as _time
-            from pathlib import Path
-            import requests as _requests
-
             data_dir = Path(self.connector.server.get_data_folder()) / "attachments"
             data_dir.mkdir(parents=True, exist_ok=True)
 
             # 大小检查节流（10 分钟一次）
-            now = _time.time()
+            now = time.time()
             if now - self._CACHE_CLEAN_STATE["last_check"] > 600:
                 self._CACHE_CLEAN_STATE["last_check"] = now
                 self._cleanup_attachment_cache(data_dir)
@@ -526,12 +550,11 @@ class QQOfficialParser(BasicParser):
             local = data_dir / f"{digest}{ext}"
 
             if not local.exists():
-                resp = _requests.get(url, timeout=20)
+                resp = requests.get(url, timeout=20)
                 resp.raise_for_status()
                 local.write_bytes(resp.content)
                 # 触碰 mtime：LRU 依据（重复出现的图保持"最新"）
-                import os as _os
-                _os.utime(local, None)
+                os.utime(local, None)
 
             return str(local)
         except Exception as e:
@@ -541,26 +564,36 @@ class QQOfficialParser(BasicParser):
 
     @classmethod
     def _cleanup_attachment_cache(cls, data_dir) -> None:
-        """缓存目录超过上限时按 mtime 从旧到新删除，直到回到上限内。"""
+        """缓存目录超过上限时按 mtime 从旧到新删除，直到回到上限内。
+
+        用 ``os.scandir`` 遍历：Windows 下 DirEntry 自带的 stat 信息无需
+        额外系统调用，且每个文件只取一次 stat（旧实现每文件调了两次
+        ``f.stat()``）。
+        """
         try:
             max_bytes = cls._CACHE_MAX_BYTES
             if max_bytes <= 0:
                 return
-            files = [
-                (f.stat().st_mtime, f.stat().st_size, f)
-                for f in data_dir.iterdir()
-                if f.is_file()
-            ]
+            files = []
+            with os.scandir(data_dir) as it:
+                for entry in it:
+                    try:
+                        if not entry.is_file():
+                            continue
+                        st = entry.stat()
+                    except OSError:
+                        continue
+                    files.append((st.st_mtime, st.st_size, entry.path))
             total = sum(s for _, s, _ in files)
             if total <= max_bytes:
                 return
             # 最旧优先删除
             files.sort(key=lambda x: x[0])
-            for _, size, f in files:
+            for _, size, path in files:
                 if total <= max_bytes:
                     break
                 try:
-                    f.unlink()
+                    os.unlink(path)
                     total -= size
                 except OSError:
                     pass
