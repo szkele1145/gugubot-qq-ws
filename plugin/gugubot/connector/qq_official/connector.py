@@ -555,12 +555,11 @@ class QQOfficialConnector(BasicConnector):
             t_min, t_max = t_max, t_min
         multi_part_throttle = len(message_parts) > 1
 
-        for target_id, target_type in target.items():
+        async def _send_one(target_id: str, target_type: str) -> None:
+            """向单个目标发送全部分片；跨目标相互独立、互不阻塞。"""
             if not target_id:
-                continue
-
-            # 官方模式防护：目标群还没绑定 openid（群里还没人 @机器人）时
-            # REST 地址无法确定（原样拼进 URL 只会 404），跳过并提示。
+                return
+            # 官方模式防护：目标群还没绑定 openid 时跳过并提示。
             # 放行三类：①已绑定的真实/虚拟群号 ②openid 原文（用户直接填
             # openid 进配置的场景）③映射表能翻译的号码。
             if target_type == "group":
@@ -583,7 +582,7 @@ class QQOfficialConnector(BasicConnector):
                             f"{self.log_prefix} 群 {target_id} 尚未绑定 openid"
                             f"（群内 @机器人 发条消息即可自动绑定），后续将静默跳过"
                         )
-                    continue
+                    return
 
             for part in message_parts:
                 try:
@@ -608,6 +607,13 @@ class QQOfficialConnector(BasicConnector):
                 # 分片间节流（参数循环外已读取）
                 if multi_part_throttle:
                     await asyncio.sleep(random.uniform(t_min, t_max))
+
+        # 多目标群并行发送（跨群 REST 独立限额、互不阻塞），
+        # 单群内部分片顺序与节流保持不变；任一目标失败不影响其余目标。
+        await asyncio.gather(
+            *(_send_one(tid, ttype) for tid, ttype in target.items()),
+            return_exceptions=True,
+        )
 
     # ------------------------------------------------------------------ #
     # 内部发送
