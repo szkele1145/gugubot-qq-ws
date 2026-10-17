@@ -227,7 +227,8 @@ class VoteSystem(BasicSystem):
         Parameters
         ----------
         broadcast_info : BroadcastInfo
-            广播信息，其中 ``message[0]`` 应为文本类型的命令字符串。
+            广播信息，命令文本由全部 ``type == "text"`` 段拼接而成
+            （QQ 官方 @机器人 时首位可能是 at 段，不可只取首段）。
 
         Returns
         -------

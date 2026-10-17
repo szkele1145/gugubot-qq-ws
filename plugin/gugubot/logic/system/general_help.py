@@ -108,7 +108,9 @@ class GeneralHelpSystem(BasicSystem):
         inactive_check_name = self.server.tr("gugubot.system.inactive_check.name")
         vote_name = self.server.tr("gugubot.system.vote.name")
 
-        # 官方直连专用命令（仅在 QQ 官方连接器下可用）
+        # 官方直连专用命令：仅作为 get_tr 的可选参数传入，供自定义语言模板
+        # 以 {official_status} / {whoami} 占位符引用；内置 zh_cn/en_us 模板
+        # 已直接写死命令名，因此这两个参数缺省不影响显示。
         official_status_cmd = "#状态 / #status"
         whoami_cmd = "#我是谁 / #whoami"
 
