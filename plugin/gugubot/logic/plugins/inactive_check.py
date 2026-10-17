@@ -126,8 +126,14 @@ class InactiveCheckSystem(BasicConfig, BasicSystem):
         if not message:
             return False
 
-        first_message = message[0]
-        if first_message.get("type") != "text":
+        # QQ 官方 @机器人 时消息段首位可能是 at 段，text 段不必然在 index 0；
+        # 须拼接全部 type=="text" 段后再做前缀/命令解析（同 player_list.py 已修）。
+        content = "".join(
+            seg.get("data", {}).get("text", "")
+            for seg in message
+            if seg.get("type") == "text"
+        ).strip()
+        if not content:
             return False
 
         # 先检查是否是开启/关闭命令
@@ -152,7 +158,11 @@ class InactiveCheckSystem(BasicConfig, BasicSystem):
         if not broadcast_info.is_admin:
             return False
 
-        command = broadcast_info.message[0].get("data", {}).get("text", "")
+        command = "".join(
+            seg.get("data", {}).get("text", "")
+            for seg in broadcast_info.message
+            if seg.get("type") == "text"
+        )
         command_prefix = self.config.get("GUGUBot", {}).get("command_prefix", "#")
         system_name = self.get_tr("name")
 

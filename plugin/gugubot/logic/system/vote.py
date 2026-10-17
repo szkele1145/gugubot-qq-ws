@@ -234,7 +234,11 @@ class VoteSystem(BasicSystem):
         bool
             命令被识别并处理返回 ``True``，否则返回 ``False``。
         """
-        command = broadcast_info.message[0].get("data", {}).get("text", "")
+        command = "".join(
+            seg.get("data", {}).get("text", "")
+            for seg in broadcast_info.message
+            if seg.get("type") == "text"
+        )
         command_prefix = self.config.get("GUGUBot", {}).get("command_prefix", "#")
         system_name = self.get_tr("name")
 
@@ -308,8 +312,9 @@ class VoteSystem(BasicSystem):
         if not message:
             return False
 
-        first_message = message[0]
-        if first_message.get("type") != "text":
+        # QQ 官方 @机器人 时消息段首位可能是 at 段，text 段不必然在 index 0；
+        # 仅需确认存在文本段即可（下游命令由各 _handle_* 拼接文本段解析）。
+        if not any(seg.get("type") == "text" for seg in message):
             return False
 
         # 先检查是否是命令（如 #投票）
@@ -525,7 +530,11 @@ class VoteSystem(BasicSystem):
             return True
 
         # 从命令中提取序号
-        command = broadcast_info.message[0].get("data", {}).get("text", "")
+        command = "".join(
+            seg.get("data", {}).get("text", "")
+            for seg in broadcast_info.message
+            if seg.get("type") == "text"
+        )
         command_prefix = self.config.get("GUGUBot", {}).get("command_prefix", "#")
         system_name = self.get_tr("name")
         remove_command = self.get_tr("remove")
@@ -669,7 +678,11 @@ class VoteSystem(BasicSystem):
             始终返回 ``True``（已处理该命令）。
         """
         # 从命令中提取可能的类型名
-        command = broadcast_info.message[0].get("data", {}).get("text", "")
+        command = "".join(
+            seg.get("data", {}).get("text", "")
+            for seg in broadcast_info.message
+            if seg.get("type") == "text"
+        )
         command_prefix = self.config.get("GUGUBot", {}).get("command_prefix", "#")
         system_name = self.get_tr("name")
         types_command = self.get_tr("types")
@@ -782,7 +795,11 @@ class VoteSystem(BasicSystem):
             始终返回 ``True``（已处理该命令）。
         """
         # 从命令中提取序号
-        command = broadcast_info.message[0].get("data", {}).get("text", "")
+        command = "".join(
+            seg.get("data", {}).get("text", "")
+            for seg in broadcast_info.message
+            if seg.get("type") == "text"
+        )
         command_prefix = self.config.get("GUGUBot", {}).get("command_prefix", "#")
         system_name = self.get_tr("name")
         withdraw_command = self.get_tr("withdraw")

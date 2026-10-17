@@ -71,9 +71,14 @@ class BoundSystem(BasicSystem):
         if not message:
             return False
 
-        first_message = message[0]
-
-        if first_message.get("type") != "text":
+        # QQ 官方 @机器人 时消息段首位可能是 at 段，text 段不必然在 index 0；
+        # 须拼接全部 type=="text" 段后再做前缀/命令解析（同 player_list.py 已修）。
+        content = "".join(
+            seg.get("data", {}).get("text", "")
+            for seg in message
+            if seg.get("type") == "text"
+        ).strip()
+        if not content:
             return False
 
         return await self._handle_msg(broadcast_info)
@@ -99,7 +104,11 @@ class BoundSystem(BasicSystem):
 
     async def _handle_command(self, broadcast_info: BroadcastInfo) -> bool:
         """处理绑定相关命令"""
-        command = broadcast_info.message[0].get("data", {}).get("text", "")
+        command = "".join(
+            seg.get("data", {}).get("text", "")
+            for seg in broadcast_info.message
+            if seg.get("type") == "text"
+        )
         command_prefix = self.config.get("GUGUBot", {}).get("command_prefix", "#")
         system_name = self.get_tr("name")
 
@@ -137,7 +146,11 @@ class BoundSystem(BasicSystem):
 
     async def _handle_bind(self, broadcast_info: BroadcastInfo) -> bool:
         """处理绑定命令"""
-        command = broadcast_info.message[0].get("data", {}).get("text", "")
+        command = "".join(
+            seg.get("data", {}).get("text", "")
+            for seg in broadcast_info.message
+            if seg.get("type") == "text"
+        )
         command_prefix = self.config.get("GUGUBot", {}).get("command_prefix", "#")
         system_name = self.get_tr("name")
         bind_cmd = self.get_tr("bind")
@@ -421,7 +434,11 @@ class BoundSystem(BasicSystem):
 
     async def _handle_unbind(self, broadcast_info: BroadcastInfo) -> bool:
         """处理解绑命令"""
-        command = broadcast_info.message[0].get("data", {}).get("text", "")
+        command = "".join(
+            seg.get("data", {}).get("text", "")
+            for seg in broadcast_info.message
+            if seg.get("type") == "text"
+        )
         command_prefix = self.config.get("GUGUBot", {}).get("command_prefix", "#")
         system_name = self.get_tr("name")
         unbind_command = self.get_tr("unbind")

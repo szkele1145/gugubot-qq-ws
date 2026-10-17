@@ -105,7 +105,11 @@ class BanWordSystem(BasicConfig, BasicSystem):
 
     async def _handle_command(self, broadcast_info: BroadcastInfo) -> bool:
         """处理命令"""
-        command = broadcast_info.message[0].get("data", {}).get("text", "")
+        command = "".join(
+            seg.get("data", {}).get("text", "")
+            for seg in broadcast_info.message
+            if seg.get("type") == "text"
+        )
         command_prefix = self.config.get("GUGUBot", {}).get("command_prefix", "#")
         system_name = self.get_tr("name")
 
@@ -127,7 +131,11 @@ class BanWordSystem(BasicConfig, BasicSystem):
 
     async def _handle_add(self, broadcast_info: BroadcastInfo) -> bool:
         """处理添加违禁词命令"""
-        command = broadcast_info.message[0].get("data", {}).get("text", "")
+        command = "".join(
+            seg.get("data", {}).get("text", "")
+            for seg in broadcast_info.message
+            if seg.get("type") == "text"
+        )
         command_prefix = self.config.get("GUGUBot", {}).get("command_prefix", "#")
         system_name = self.get_tr("name")
         add_command = self.get_tr("add")
@@ -171,7 +179,11 @@ class BanWordSystem(BasicConfig, BasicSystem):
 
     async def _handle_remove(self, broadcast_info: BroadcastInfo) -> bool:
         """处理删除违禁词命令"""
-        command = broadcast_info.message[0].get("data", {}).get("text", "")
+        command = "".join(
+            seg.get("data", {}).get("text", "")
+            for seg in broadcast_info.message
+            if seg.get("type") == "text"
+        )
         command_prefix = self.config.get("GUGUBot", {}).get("command_prefix", "#")
         system_name = self.get_tr("name")
         remove_command = self.get_tr("remove")

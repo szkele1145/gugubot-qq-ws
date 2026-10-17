@@ -56,8 +56,9 @@ class WhitelistSystem(BasicSystem):
         if not message:
             return False
 
-        first_message = message[0]
-        if first_message.get("type") != "text":
+        # QQ 官方 @机器人 时消息段首位可能是 at 段，text 段不必然在 index 0；
+        # 仅需确认存在文本段即可（下游命令由各 _handle_* 拼接文本段解析）。
+        if not any(seg.get("type") == "text" for seg in message):
             return False
 
         return await self._handle_msg(broadcast_info)
@@ -76,7 +77,11 @@ class WhitelistSystem(BasicSystem):
         if not is_admin:
             return False
 
-        command = broadcast_info.message[0].get("data", {}).get("text", "")
+        command = "".join(
+            seg.get("data", {}).get("text", "")
+            for seg in broadcast_info.message
+            if seg.get("type") == "text"
+        )
         command_prefix = self.config.get("GUGUBot", {}).get("command_prefix", "#")
         system_name = self.get_tr("name")
 
@@ -184,7 +189,11 @@ class WhitelistSystem(BasicSystem):
 
     async def _handle_add(self, broadcast_info: BroadcastInfo) -> bool:
         """处理添加玩家命令"""
-        command = broadcast_info.message[0].get("data", {}).get("text", "")
+        command = "".join(
+            seg.get("data", {}).get("text", "")
+            for seg in broadcast_info.message
+            if seg.get("type") == "text"
+        )
         command_prefix = self.config.get("GUGUBot", {}).get("command_prefix", "#")
         system_name = self.get_tr("name")
         add_command = self.get_tr("add")
@@ -233,7 +242,11 @@ class WhitelistSystem(BasicSystem):
 
     async def _handle_remove(self, broadcast_info: BroadcastInfo) -> bool:
         """处理移除玩家命令"""
-        command = broadcast_info.message[0].get("data", {}).get("text", "")
+        command = "".join(
+            seg.get("data", {}).get("text", "")
+            for seg in broadcast_info.message
+            if seg.get("type") == "text"
+        )
         command_prefix = self.config.get("GUGUBot", {}).get("command_prefix", "#")
         system_name = self.get_tr("name")
         remove_command = self.get_tr("remove")

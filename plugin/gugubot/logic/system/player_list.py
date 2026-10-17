@@ -141,7 +141,7 @@ class PlayerListSystem(BasicSystem):
 
         message = broadcast_info.message
 
-        if not message or message[0].get("type") != "text":
+        if not message:
             return False
 
         # 提取所有文本段并拼接：QQ official 消息可能以 at 段开头，

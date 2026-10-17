@@ -49,7 +49,11 @@ class ConfigCheckSystem(BasicSystem):
         message = broadcast_info.message
         if not message:
             return False
-        content = message[0].get("data", {}).get("text", "")
+        content = "".join(
+            seg.get("data", {}).get("text", "")
+            for seg in message
+            if seg.get("type") == "text"
+        )
         prefix = self.config.get_keys(["GUGUBot", "command_prefix"], "#")
         rest = content[len(prefix):].strip() if content.startswith(prefix) else ""
 

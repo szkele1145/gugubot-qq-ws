@@ -88,11 +88,13 @@ class StartupCommandSystem(BasicConfig, BasicSystem):
         if not message:
             return False
 
-        first_message = message[0]
-        if first_message.get("type") != "text":
-            return False
-
-        content = first_message.get("data", {}).get("text", "").strip()
+        # QQ 官方 @机器人 时消息段首位可能是 at 段，text 段不必然在 index 0；
+        # 须拼接全部 type=="text" 段后再做前缀/命令解析。
+        content = "".join(
+            seg.get("data", {}).get("text", "")
+            for seg in message
+            if seg.get("type") == "text"
+        ).strip()
         command_prefix = self.config.get("GUGUBot", {}).get("command_prefix", "#")
         system_name = self.get_tr("name")
 

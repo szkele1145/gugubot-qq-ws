@@ -52,10 +52,14 @@ class KeyWordSystem(BasicConfig, BasicSystem):
         if not message:
             return False
 
-        first_message = message[0]
-        ACCEPTABLE_TYPES = ["text", "image"]
-
-        if first_message.get("type") not in ACCEPTABLE_TYPES:
+        # QQ 官方 @机器人 时消息段首位可能是 at 段，text 段不必然在 index 0；
+        # 须拼接全部 type=="text" 段后再做前缀/命令解析（同 player_list.py 已修）。
+        content = "".join(
+            seg.get("data", {}).get("text", "")
+            for seg in message
+            if seg.get("type") == "text"
+        ).strip()
+        if not content:
             return False
 
         # 先检查是否是开启/关闭命令
@@ -66,7 +70,11 @@ class KeyWordSystem(BasicConfig, BasicSystem):
 
     async def _handle_msg(self, broadcast_info: BroadcastInfo) -> bool:
         """处理消息"""
-        content = broadcast_info.message[0].get("data", {}).get("text", "")
+        content = "".join(
+            seg.get("data", {}).get("text", "")
+            for seg in broadcast_info.message
+            if seg.get("type") == "text"
+        )
 
         if not self.enable:
             return False
@@ -146,7 +154,11 @@ class KeyWordSystem(BasicConfig, BasicSystem):
         return False
 
     async def _handle_command(self, broadcast_info: BroadcastInfo) -> bool:
-        command = broadcast_info.message[0].get("data", {}).get("text", "")
+        command = "".join(
+            seg.get("data", {}).get("text", "")
+            for seg in broadcast_info.message
+            if seg.get("type") == "text"
+        )
         command_prefix = self.config.get("GUGUBot", {}).get("command_prefix", "#")
         system_name = self.get_tr("name")
 
@@ -181,7 +193,11 @@ class KeyWordSystem(BasicConfig, BasicSystem):
         return await self._handle_help(broadcast_info)
 
     async def _handle_add(self, broadcast_info: BroadcastInfo) -> bool:
-        command = broadcast_info.message[0].get("data", {}).get("text", "")
+        command = "".join(
+            seg.get("data", {}).get("text", "")
+            for seg in broadcast_info.message
+            if seg.get("type") == "text"
+        )
         command_prefix = self.config.get("GUGUBot", {}).get("command_prefix", "#")
         system_name = self.get_tr("name")
         add_command = self.get_tr("add")
@@ -293,7 +309,11 @@ class KeyWordSystem(BasicConfig, BasicSystem):
 
     async def _handle_remove(self, broadcast_info: BroadcastInfo) -> bool:
         """处理删除关键词命令"""
-        command = broadcast_info.message[0].get("data", {}).get("text", "")
+        command = "".join(
+            seg.get("data", {}).get("text", "")
+            for seg in broadcast_info.message
+            if seg.get("type") == "text"
+        )
         command_prefix = self.config.get("GUGUBot", {}).get("command_prefix", "#")
         system_name = self.get_tr("name")
         remove_command = self.get_tr("remove")

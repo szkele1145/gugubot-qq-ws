@@ -73,8 +73,9 @@ class TodoSystem(BasicConfig, BasicSystem):
         if not message:
             return False
 
-        first_message = message[0]
-        if first_message.get("type") != "text":
+        # QQ 官方 @机器人 时消息段首位可能是 at 段，text 段不必然在 index 0；
+        # 仅需确认存在文本段即可（下游客服命令由各 _handle_* 拼接文本段解析）。
+        if not any(seg.get("type") == "text" for seg in message):
             return False
 
         return await self._handle_msg(broadcast_info)
@@ -90,7 +91,11 @@ class TodoSystem(BasicConfig, BasicSystem):
         """处理待办相关命令"""
         # 所有用户都可以使用，不检查is_admin权限
 
-        command = broadcast_info.message[0].get("data", {}).get("text", "")
+        command = "".join(
+            seg.get("data", {}).get("text", "")
+            for seg in broadcast_info.message
+            if seg.get("type") == "text"
+        )
         command_prefix = self.config.get("GUGUBot", {}).get("command_prefix", "#")
         system_name = self.get_tr("name")
 
@@ -116,7 +121,11 @@ class TodoSystem(BasicConfig, BasicSystem):
 
     async def _handle_add(self, broadcast_info: BroadcastInfo) -> bool:
         """处理添加待办命令"""
-        command = broadcast_info.message[0].get("data", {}).get("text", "")
+        command = "".join(
+            seg.get("data", {}).get("text", "")
+            for seg in broadcast_info.message
+            if seg.get("type") == "text"
+        )
         command_prefix = self.config.get("GUGUBot", {}).get("command_prefix", "#")
         system_name = self.get_tr("name")
         add_command = self.get_tr("add")
@@ -165,7 +174,11 @@ class TodoSystem(BasicConfig, BasicSystem):
 
     async def _handle_remove(self, broadcast_info: BroadcastInfo) -> bool:
         """处理删除待办命令"""
-        command = broadcast_info.message[0].get("data", {}).get("text", "")
+        command = "".join(
+            seg.get("data", {}).get("text", "")
+            for seg in broadcast_info.message
+            if seg.get("type") == "text"
+        )
         command_prefix = self.config.get("GUGUBot", {}).get("command_prefix", "#")
         system_name = self.get_tr("name")
         remove_command = self.get_tr("remove")
@@ -202,7 +215,11 @@ class TodoSystem(BasicConfig, BasicSystem):
 
     async def _handle_complete(self, broadcast_info: BroadcastInfo) -> bool:
         """处理完成待办命令"""
-        command = broadcast_info.message[0].get("data", {}).get("text", "")
+        command = "".join(
+            seg.get("data", {}).get("text", "")
+            for seg in broadcast_info.message
+            if seg.get("type") == "text"
+        )
         command_prefix = self.config.get("GUGUBot", {}).get("command_prefix", "#")
         system_name = self.get_tr("name")
         complete_command = self.get_tr("complete")
@@ -252,7 +269,11 @@ class TodoSystem(BasicConfig, BasicSystem):
 
     async def _handle_undo(self, broadcast_info: BroadcastInfo) -> bool:
         """处理撤回完成命令"""
-        command = broadcast_info.message[0].get("data", {}).get("text", "")
+        command = "".join(
+            seg.get("data", {}).get("text", "")
+            for seg in broadcast_info.message
+            if seg.get("type") == "text"
+        )
         command_prefix = self.config.get("GUGUBot", {}).get("command_prefix", "#")
         system_name = self.get_tr("name")
         undo_command = self.get_tr("undo")
