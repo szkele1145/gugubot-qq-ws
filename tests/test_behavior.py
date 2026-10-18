@@ -60,6 +60,21 @@ assert mapper2.to_legacy_group("OPENID_GROUP_A") == "123456"
 assert mapper2.to_legacy_user("OPENID_USER_X") == u1
 print("PASS: id_map 绑定/虚拟号/持久化")
 
+# ===== 测试 1b: id_map 防御 —— 文件缺 next_* 计数器时不得分配重复虚拟号 =====
+# 模拟旧版/手工编辑的映射文件：有 user_map 记录但无 next_user 字段
+import json as _json
+ids_file = pathlib.Path(tempfile.mkdtemp()) / "ids.json"
+ids_file.write_text(
+    _json.dumps({"user_map": {"OLD_U": "100000000007"}}),
+    encoding="utf-8",
+)
+mapper_fix = QQIDMapper(data_file=ids_file)
+new_legacy = mapper_fix.to_legacy_user("NEW_U")
+assert int(new_legacy) >= 100000000008, (
+    f"重复虚拟号：文件缺 next_user 时应从已有最大号+1 起分配，实际分到 {new_legacy}"
+)
+print("PASS: id_map 计数器防御（无重复虚拟号）")
+
 # ===== 测试 2: reply_pool =====
 from gugubot.connector.qq_official.reply_pool import QQReplyPool
 pool = QQReplyPool()

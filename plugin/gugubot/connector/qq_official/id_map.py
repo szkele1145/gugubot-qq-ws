@@ -87,6 +87,22 @@ class QQIDMapper:
                 self._openid_group_legacy = dict(data.get("openid_group_legacy", {}))
                 self._next_user = int(data.get("next_user", _BASE_USER))
                 self._next_group = int(data.get("next_group", _BASE_GROUP))
+                # 防御：文件缺 next_user/next_group 字段（旧版文件或手工
+                # 编辑过）会让计数器回落到起始号，而 _user_map 里早已占用
+                # 这些号 —— 新 openid 将分到**重复虚拟号**，反向解析只认得
+                # 最后一个，消息会发错人。这里按已有映射的最大号 +1 兜底。
+                max_user = max(
+                    (int(v) for v in self._user_map.values() if str(v).isdigit()),
+                    default=_BASE_USER - 1,
+                )
+                if self._next_user <= max_user:
+                    self._next_user = max_user + 1
+                max_group = max(
+                    (int(v) for v in self._group_map.values() if str(v).isdigit()),
+                    default=_BASE_GROUP - 1,
+                )
+                if self._next_group <= max_group:
+                    self._next_group = max_group + 1
         except Exception as e:
             if self._logger:
                 self._logger.warning(f"[QQ官方] 读取 ID 映射文件失败: {e}")
