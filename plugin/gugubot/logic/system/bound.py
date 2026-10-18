@@ -129,6 +129,8 @@ class BoundSystem(BasicSystem):
             return await self._handle_help(broadcast_info)
         elif command.startswith(self.get_tr("unbind")):
             return await self._handle_unbind(broadcast_info)
+        elif command.startswith(self.get_tr("search")):
+            return await self._handle_search(broadcast_info)
         elif command.startswith(self.get_tr("list")):
             return await self._handle_list(broadcast_info)
         elif broadcast_info.is_admin:
@@ -936,6 +938,94 @@ class BoundSystem(BasicSystem):
     def get_player_by_qq_id(self, qq_id: str) -> Optional[Player]:
         """通过QQ ID获取玩家信息"""
         return self.player_manager.get_player(qq_id)
+
+    async def _handle_search(self, broadcast_info: BroadcastInfo) -> bool:
+        """处理绑定查询命令。
+
+        - 无参数：查询发送者自己的绑定
+        - 带参数（玩家名或 QQ/虚拟号）：管理员可查任意玩家；
+          普通用户带参数时同样只回自己的（防止借查询枚举他人绑定）
+        """
+        command = "".join(
+            seg.get("data", {}).get("text", "")
+            for seg in broadcast_info.message
+            if seg.get("type") == "text"
+        )
+        command_prefix = self.config.get("GUGUBot", {}).get("command_prefix", "#")
+        system_name = self.get_tr("name")
+        search_cmd = self.get_tr("search")
+
+        for i in [command_prefix, system_name]:
+            command = command.replace(i, "", 1).strip()
+        # 去掉子命令词，剩下的就是查询目标
+        command = command.replace(search_cmd, "", 1).strip()
+
+        # 无参数 → 查自己（与 #list 个人视角一致，但明确报"未绑定"）
+        if not command:
+            player = self.player_manager.get_player(
+                broadcast_info.sender_id, platform="QQ"
+            )
+            if not player:
+                await self.reply(
+                    broadcast_info,
+                    [MessageBuilder.text(self.get_tr("no_bindings"))],
+                )
+                return True
+            await self.reply(
+                broadcast_info,
+                [MessageBuilder.text(self._format_player_info(player))],
+            )
+            return True
+
+        # 带参数：仅管理员可查任意目标
+        if not broadcast_info.is_admin:
+            await self.reply(
+                broadcast_info,
+                [MessageBuilder.text(self.get_tr("no_permission", global_key=True))],
+            )
+            return True
+
+        player = self.player_manager.get_player(command)
+        if not player:
+            await self.reply(
+                broadcast_info,
+                [
+                    MessageBuilder.text(
+                        self.get_tr("no_bindings_for_player", player_name=command)
+                    )
+                ],
+            )
+            return True
+        await self.reply(
+            broadcast_info,
+            [MessageBuilder.text(self._format_player_info(player))],
+        )
+        return True
+
+    def _format_player_info(self, player) -> str:
+        """把 Player 渲染为人类可读的绑定信息文本。"""
+        name_parts = []
+        java_names = [str(n) for n in player.java_name]
+        bedrock_names = [str(n) for n in player.bedrock_name]
+        if java_names:
+            name_parts.append("Java: " + ", ".join(java_names))
+        if bedrock_names:
+            name_parts.append("基岩: " + ", ".join(bedrock_names))
+
+        account_parts = []
+        for platform, accounts in player.accounts.items():
+            account_parts.append(
+                f"{platform}: " + ", ".join(str(a) for a in accounts)
+            )
+
+        lines = []
+        if name_parts:
+            lines.append(" | ".join(name_parts))
+        else:
+            lines.append("无游戏名")
+        if account_parts:
+            lines.append(" | ".join(account_parts))
+        return "\n".join(lines)
 
     def get_player_by_name(self, player_name: str) -> Optional[Player]:
         """通过玩家名获取玩家信息"""
