@@ -262,6 +262,24 @@ mid, seq = pool.take("c2c:OPENID_USER_X")
 assert mid == "C2C_MSG_1"
 print("PASS: parser C2C 解析")
 
+# 机器人被添加/移出群（GROUP_ADD_ROBOT 是官方真实事件名，GROUP_ADD_ROM 是别名）
+for ev_name, expect_add in [
+    ("GROUP_ADD_ROBOT", True),
+    ("GROUP_DEL_ROBOT", False),
+    ("GROUP_ADD_ROM", True),
+    ("GROUP_DEL_ROM", False),
+]:
+    bot_change = {"_event_name": ev_name, "_data": {"group_openid": "OPENID_GROUP_A"}}
+    info_bc = asyncio.new_event_loop().run_until_complete(p.parse(bot_change))
+    assert info_bc is not None and info_bc.event_sub_type == "group_bot_change", (
+        f"{ev_name} 应解析为 group_bot_change notice"
+    )
+    text_bc = info_bc.message[0]["data"]["text"]
+    assert ("添加到" in text_bc) == expect_add, (
+        f"{ev_name} 动作判定错误: {text_bc}"
+    )
+print("PASS: parser 群机器人增减事件（GROUP_ADD_ROBOT/DEL_ROBOT 与 ROM 别名动作正确）")
+
 # ===== 测试 5: segments_to_plain_text（原 segments_to_content 已统一到公共函数） =====
 from gugubot.utils.message import segments_to_plain_text
 segs = [

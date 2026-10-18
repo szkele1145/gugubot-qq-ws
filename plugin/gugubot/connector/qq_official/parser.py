@@ -417,7 +417,14 @@ class QQOfficialParser(BasicParser):
         user_legacy = (
             self.connector.id_mapper.to_legacy_user(op_user) if op_user else ""
         )
-        action = "添加到" if event_name == "GROUP_ADD_ROM" else "移出"
+        # 注意：官方真实事件名是 GROUP_ADD_ROBOT / GROUP_DEL_ROBOT；
+        # GROUP_ADD_ROM / GROUP_DEL_ROM 是早期文档笔误留下的兼容别名。
+        # 两种「添加」写法都要算添加，否则机器人被拉进群时会误报成「移出」。
+        action = (
+            "添加到"
+            if event_name in ("GROUP_ADD_ROBOT", "GROUP_ADD_ROM")
+            else "移出"
+        )
         return BroadcastInfo(
             event_type="notice",
             event_sub_type="group_bot_change",
