@@ -238,6 +238,35 @@ class QQOfficialParser(BasicParser):
         legacy_group = id_mapper.to_legacy_group(group_openid)
         legacy_user = id_mapper.to_legacy_user(member_openid)
 
+        # 廉价校验先行：附件下载带 20s 超时、at 展开也有开销，而机器人
+        # 消息 / 排除用户 / 未监听群 在旧实现里会先下载全部图片落盘、构建
+        # 完消息段才丢弃，白耗带宽与缓存。这里先把过滤全部做完。
+        username = (author.get("username", "") or "").strip()
+
+        # 机器人消息过滤（官方事件 author.bot 字段明确标注机器人身份）：
+        # 拦掉 Q群管家等系统机器人的消息，防止转发回声循环
+        if author.get("bot", False):
+            if self.logger:
+                self.logger.debug(f"[QQ官方] 拦截机器人消息（{username}），不转发")
+            return None
+
+        if await self._should_exclude_user(legacy_user):
+            if self.logger:
+                self.logger.debug(f"已在connector层拦截排除用户 {legacy_user} 的消息")
+            return None
+
+        # 权限校验：该群是否在监听列表（含绑定真实群号）
+        if not self._is_valid_group(legacy_group):
+            if self.logger:
+                self.logger.info(
+                    f"[QQ官方] 群 {legacy_group}（openid {group_openid}）"
+                    f"不在监听列表（group_ids/admin_group_ids），消息已忽略"
+                )
+            return None
+
+        # 供 _is_admin 识别「当前群」（管理群判定依赖它）
+        self._current_source_id = legacy_group
+
         content = data.get("content", "") or ""
 
         # 富媒体附件 → image/record/video 段
@@ -258,33 +287,11 @@ class QQOfficialParser(BasicParser):
         )
 
         # 显示名：官方下发真实昵称 username（新平台能力）；没有则回退虚拟号
-        username = (author.get("username", "") or "").strip()
         sender_name = username or f"成员{legacy_user[-4:]}"
-
-        # 机器人消息过滤（官方事件 author.bot 字段明确标注机器人身份）：
-        # 拦掉 Q群管家等系统机器人的消息，防止转发回声循环
-        if author.get("bot", False):
-            self.logger.debug(f"[QQ官方] 拦截机器人消息（{username}），不转发")
-            return None
 
         # 群内角色（新平台能力）：owner/admin 视为管理员
         member_role = (author.get("member_role", "") or "").strip().lower()
         role_is_admin = member_role in ("owner", "admin")
-
-        if await self._should_exclude_user(legacy_user):
-            self.logger.debug(f"已在connector层拦截排除用户 {legacy_user} 的消息")
-            return None
-
-        # 权限校验：该群是否在监听列表（含绑定真实群号）
-        if not self._is_valid_group(legacy_group):
-            if self.logger:
-                self.logger.info(
-                    f"[QQ官方] 群 {legacy_group}（openid {group_openid}）"
-                    f"不在监听列表（group_ids/admin_group_ids），消息已忽略"
-                )
-            return None
-
-        self._current_source_id = legacy_group
 
         # 空消息保底（无文本/附件/@时跳过广播，不产出空段列表）
         if not segments:
@@ -319,19 +326,29 @@ class QQOfficialParser(BasicParser):
         user_openid = data.get("author", {}).get("user_openid", "") or data.get(
             "user_openid", ""
         )
+        legacy_user = id_mapper.to_legacy_user(user_openid)
+
+        # 先入回复池（与群消息同理：先占用被动回复额度；后续过滤即便
+        # 丢弃本条消息，已入池的 msg_id 仍可供其他广播做被动回复）
         msg_id = data.get("id", "")
         if msg_id:
             connector.reply_pool.add(f"c2c:{user_openid}", msg_id, event_id=event_id)
 
-        legacy_user = id_mapper.to_legacy_user(user_openid)
-        content = (data.get("content", "") or "").strip()
-
+        # 廉价校验先行（与群消息同序：避免为将被丢弃的消息下载附件）
         # 机器人消息过滤（与群消息一致：author.bot 拦截防回声）
         author = data.get("author", {}) or {}
         username = (author.get("username", "") or "").strip()
         if author.get("bot", False):
-            self.logger.debug(f"[QQ官方] 拦截机器人单聊消息（{username}），不转发")
+            if self.logger:
+                self.logger.debug(
+                    f"[QQ官方] 拦截机器人单聊消息（{username}），不转发"
+                )
             return None
+
+        if await self._should_exclude_user(legacy_user):
+            return None
+
+        content = (data.get("content", "") or "").strip()
 
         # @标记原位展开为 at 段（与群消息一致）
         bot_official_id = str(getattr(self.connector.bot, "self_id", "") or "")
@@ -341,9 +358,6 @@ class QQOfficialParser(BasicParser):
                 content, id_mapper, {}, bot_official_id
             )
         )
-
-        if await self._should_exclude_user(legacy_user):
-            return None
 
         # 官方单聊默认不放开权限（无 friend_is_admin 概念），保持与管理员列表匹配
         is_admin = self._is_admin(legacy_user)
