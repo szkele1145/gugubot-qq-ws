@@ -175,6 +175,7 @@ class QQOfficialWSClient:
         backoff = 3
         stop = self._stop_event
         logger = self._logger
+        first_run = True
         while not stop.is_set():
             if self._last_close_code == 4014:
                 # 能力未开通：重连必被拒，长退避等用户修配置/权限
@@ -183,8 +184,9 @@ class QQOfficialWSClient:
                 stop.wait(60)
                 continue
             try:
-                # 重连（非首次）时刷新网关地址
-                if self.ws is not None:
+                # 重连（非首次）时才刷新网关地址：首次的地址已由 connect()
+                # 取好，重复请求会白耗一次 /gateway REST 往返（该接口有频率限制）
+                if not first_run:
                     new_url = self._fetch_wss_url()
                     self.ws = websocket.WebSocketApp(
                         new_url,
@@ -193,6 +195,7 @@ class QQOfficialWSClient:
                         on_error=self._on_error,
                         on_close=self._on_close,
                     )
+                first_run = False
                 self.ws.run_forever()
                 backoff = 3  # 连接成功过则重置退避
             except Exception as e:
@@ -459,8 +462,9 @@ class QQOfficialWSClient:
                 ok = send_json({"op": OP_HEARTBEAT, "d": self.last_seq})
                 if not ok and logger:
                     logger.warning("[QQ官方] 心跳发送失败，连接可能已断开")
-                    continue
-                # 发送成功但连续 2 次无 ACK → 判死链路，主动断开触发重连
+                # 发送失败与「发出但无 ACK」统一计入失活计数：两者都说明链路
+                # 已死，累计 2 次即主动断开触发重连。（旧实现把 continue 挂在
+                # `and logger` 分支里，导致 logger 为 None 时行为反而不一致）
                 self._hb_ack_miss += 1
                 if self._hb_ack_miss >= 2:
                     if self._logger:
