@@ -506,7 +506,7 @@ class InactiveCheckSystem(BasicConfig, BasicSystem):
                 try:
                     member_list_result = (
                         await self.qq_connector.bot.get_group_member_list(
-                            group_id=int(admin_group_id)
+                            group_id=admin_group_id
                         )
                     )
                     if member_list_result and member_list_result.get("status") == "ok":
@@ -536,7 +536,7 @@ class InactiveCheckSystem(BasicConfig, BasicSystem):
                 try:
                     member_list_result = (
                         await self.qq_connector.bot.get_group_member_list(
-                            group_id=int(group_id)
+                            group_id=group_id
                         )
                     )
                     if member_list_result and member_list_result.get("status") == "ok":
@@ -615,8 +615,8 @@ class InactiveCheckSystem(BasicConfig, BasicSystem):
                         if auto_fix_enabled and change_group_card:
                             try:
                                 await self.qq_connector.bot.set_group_card(
-                                    group_id=int(group_id),
-                                    user_id=int(qq_str),
+                                    group_id=str(group_id),
+                                    user_id=str(qq_str),
                                     card=expected_name,
                                 )
                             except Exception:
@@ -777,7 +777,7 @@ class InactiveCheckSystem(BasicConfig, BasicSystem):
 
                 # 获取群信息
                 group_info_result = await self.qq_connector.bot.get_group_info(
-                    group_id=int(group_id)
+                    group_id=group_id
                 )
                 group_name = "未知群"
                 if group_info_result and group_info_result.get("status") == "ok":
@@ -867,7 +867,7 @@ class InactiveCheckSystem(BasicConfig, BasicSystem):
                             continue
                         try:
                             await self.qq_connector.bot.send_private_msg(
-                                user_id=int(admin_id),
+                                user_id=str(admin_id),
                                 message=[MessageBuilder.text(notification_msg)],
                             )
                         except Exception as e:
@@ -886,7 +886,7 @@ class InactiveCheckSystem(BasicConfig, BasicSystem):
                             continue
                         try:
                             await self.qq_connector.bot.send_group_msg(
-                                group_id=int(admin_group_id),
+                                group_id=str(admin_group_id),
                                 message=[MessageBuilder.text(notification_msg)],
                             )
                         except Exception as e:
@@ -899,7 +899,7 @@ class InactiveCheckSystem(BasicConfig, BasicSystem):
                 if origin_group:
                     try:
                         await self.qq_connector.bot.send_group_msg(
-                            group_id=int(group_id),
+                            group_id=str(group_id),
                             message=[MessageBuilder.text(notification_msg)],
                         )
                     except Exception as e:
