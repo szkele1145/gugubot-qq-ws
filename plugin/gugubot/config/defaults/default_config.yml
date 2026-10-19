@@ -173,6 +173,9 @@ system:
   config_check: # 配置语法检查 (#config)
     enable: true
 
+  config_reload: # 配置热重载 (#重载配置) —— 免重启重新读取 config.yml
+    enable: true
+
   echo: # 转发系统
     enable: true
 

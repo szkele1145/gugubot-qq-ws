@@ -36,6 +36,7 @@ from gugubot.logic.system import (
     GeneralHelpSystem,
     KeyWordSystem,
     ConfigCheckSystem,
+    ConfigReloadSystem,
     OfficialStatusSystem,
     PlayerListSystem,
     PluginCommandSystem,
@@ -235,6 +236,12 @@ async def on_load(server: PluginServerInterface, _) -> None:
         connector_manager=connector_manager, config=gugubot_config
     )
     systems.insert(len(systems) - 1, config_check_system)
+
+    # 配置热重载系统（#重载配置 / #reload config；管理员专用）
+    config_reload_system = ConfigReloadSystem(
+        connector_manager=connector_manager, config=gugubot_config
+    )
+    systems.insert(len(systems) - 1, config_reload_system)
 
     for system in systems:
         system_manager.register_system(system)

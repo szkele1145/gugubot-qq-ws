@@ -9,6 +9,7 @@ from gugubot.logic.system.execute import ExecuteSystem
 from gugubot.logic.system.general_help import GeneralHelpSystem
 from gugubot.logic.system.key_word import KeyWordSystem
 from gugubot.logic.system.config_check import ConfigCheckSystem
+from gugubot.logic.system.config_reload import ConfigReloadSystem
 from gugubot.logic.system.official_status import OfficialStatusSystem
 from gugubot.logic.system.player_list import PlayerListSystem
 from gugubot.logic.system.plugin_commands import PluginCommandSystem
