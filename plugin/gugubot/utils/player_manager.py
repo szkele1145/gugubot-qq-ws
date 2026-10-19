@@ -54,6 +54,11 @@ class PlayerManager(BasicConfig):
         self.logger = server.logger
         self.bound_system = bound_system
         self._players: Dict[str, Player] = {}  # 玩家数据字典
+        # 管理群成员列表缓存：(时间戳, 成员ID集合)
+        # is_admin() 每次调用都要遍历所有管理群拉成员列表——MC 侧每条聊天
+        # 消息都可能触发一次，放大后是 N 条消息 × M 个管理群次请求。
+        # 成员列表在短时间内不会变，缓存一小段时间即可。
+        self._admin_member_cache: Optional[tuple] = None
         data_path = Path(server.get_data_folder()) / "system" / "players.json"
         super().__init__(path=str(data_path), default_content={}, yaml_format=True)
 
@@ -219,6 +224,11 @@ class PlayerManager(BasicConfig):
 
         return False
 
+    # 管理群成员列表缓存有效期（秒）。管理群进出人不会高频变化，
+    # 30s 内的短暂陈旧完全可接受（最坏情形：新管理员加群后 30s 内
+    # 权限未生效）。
+    _ADMIN_MEMBER_CACHE_TTL = 30.0
+
     async def is_admin(self, sender_id: str) -> bool:
         """检查是否是管理员"""
         player = self.get_player(sender_id)
@@ -229,51 +239,71 @@ class PlayerManager(BasicConfig):
         config: BotConfig = self.bound_system.config
         connectors = config.get_keys(["connector"], {})
 
+        import time as _time
+
+        now = _time.monotonic()
+        cached = self._admin_member_cache
+        cache_valid = (
+            cached is not None
+            and (now - cached[0]) < self._ADMIN_MEMBER_CACHE_TTL
+        )
+
         for source, connector_config in connectors.items():
             permissions = connector_config.get("permissions", {})
             admin_ids = permissions.get("admin_ids", [])
             admin_group_ids = permissions.get("admin_group_ids", [])
 
             if source == config.get_keys(["connector", "QQ", "source_name"], "QQ"):
-                admin_group_member_ids = set()
-                member_list_supported = True
-                for admin_group_id in admin_group_ids:
-                    if not admin_group_id:
-                        continue
-                    try:
-                        admin_group_members = await self.bound_system.system_manager.connector_manager.get_connector(
-                            "QQ"
-                        ).bot.get_group_member_list(
-                            group_id=admin_group_id
-                        )
-
-                        if (
-                            admin_group_members
-                            and admin_group_members.get("status") == "ok"
-                        ):
-                            # 平台不支持成员列表（QQ 官方直连）→ data 为 None，
-                            # 与"该群没有成员"含义完全不同：此时无法识别管理群
-                            # 成员，保留空集合而不是把 None 当列表迭代
-                            members = admin_group_members.get("data")
-                            if members is None:
-                                member_list_supported = False
-                                continue
-                            admin_group_member_ids.update(
-                                [
-                                    str(member.get("user_id", ""))
-                                    for member in members
-                                ]
+                if cache_valid:
+                    # 命中缓存：免掉对每个管理群的成员列表请求
+                    admin_group_member_ids = cached[1]
+                    member_list_supported = True
+                else:
+                    admin_group_member_ids = set()
+                    member_list_supported = True
+                    for admin_group_id in admin_group_ids:
+                        if not admin_group_id:
+                            continue
+                        try:
+                            admin_group_members = await self.bound_system.system_manager.connector_manager.get_connector(
+                                "QQ"
+                            ).bot.get_group_member_list(
+                                group_id=admin_group_id
                             )
-                    except Exception as e:
-                        self.logger.error(
-                            f"获取管理群 {admin_group_id} 成员列表失败: {e}"
+
+                            if (
+                                admin_group_members
+                                and admin_group_members.get("status") == "ok"
+                            ):
+                                # 平台不支持成员列表（QQ 官方直连）→ data 为
+                                # None，与"该群没有成员"含义完全不同：此时无法
+                                # 识别管理群成员，保留空集合而不是把 None 当
+                                # 列表迭代
+                                members = admin_group_members.get("data")
+                                if members is None:
+                                    member_list_supported = False
+                                    continue
+                                admin_group_member_ids.update(
+                                    [
+                                        str(member.get("user_id", ""))
+                                        for member in members
+                                    ]
+                                )
+                        except Exception as e:
+                            self.logger.error(
+                                f"获取管理群 {admin_group_id} 成员列表失败: {e}"
+                            )
+                            continue
+                    if not member_list_supported:
+                        self.logger.warning(
+                            "[绑定系统] 当前 QQ 平台不支持获取群成员列表，"
+                            "管理群成员将无法被识别为管理员"
                         )
-                        continue
-                if not member_list_supported:
-                    self.logger.warning(
-                        "[绑定系统] 当前 QQ 平台不支持获取群成员列表，"
-                        "管理群成员将无法被识别为管理员"
-                    )
+                    # 仅在平台确实支持时缓存（官方直连模式下列表恒不可得，
+                    # 缓存与否无意义）；失败结果（空集）同样缓存——避免
+                    # WS 断连期间每条消息都打一遍 error 刷屏
+                    if member_list_supported:
+                        self._admin_member_cache = (now, admin_group_member_ids)
                 admin_group_ids = list(admin_group_member_ids)
 
             platform_accounts = player.accounts.get(source, [])

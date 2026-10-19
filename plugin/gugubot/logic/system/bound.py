@@ -645,18 +645,31 @@ class BoundSystem(BasicSystem):
         )
 
         # 合并所有群ID
-        all_group_ids = set(group_ids + admin_group_ids)
+        all_group_ids = {gid for gid in (group_ids + admin_group_ids) if gid}
 
         if not all_group_ids:
-            return member_id_set
+            # 宽松模式（未配置监听群，机器人收到的所有群都转发）下根本
+            # 无从得知有哪些群、成员是谁——这与「群里没有成员」完全不同。
+            # 当成空集会让「多余绑定检查」把全部绑定报为多余。
+            self.logger.info(
+                "[绑定系统] 未配置监听群（宽松模式），无法获取成员列表，"
+                "成员归属类检查不可用"
+            )
+            return None
 
         # 获取QQ连接器
         try:
             qq_connector = self.system_manager.connector_manager.get_connector("QQ")
             if not qq_connector or not qq_connector.bot:
-                return member_id_set
+                # 连接器未就绪：查询结果不可信，不能当空集
+                self.logger.info(
+                    "[绑定系统] QQ 连接器未就绪，无法获取成员列表，"
+                    "成员归属类检查不可用"
+                )
+                return None
 
             # 遍历所有群，获取成员列表
+            queried = 0  # 至少拿到一次真实列表的群数
             for group_id in all_group_ids:
                 if not group_id:
                     continue
@@ -674,6 +687,7 @@ class BoundSystem(BasicSystem):
                         # data 为 None 同样表示无法获取（不是"没有成员"）
                         if members is None:
                             return None
+                        queried += 1
                         for member in members:
                             user_id = str(member.get("user_id", ""))
                             if user_id:
@@ -681,8 +695,18 @@ class BoundSystem(BasicSystem):
                 except Exception as e:
                     self.logger.error(f"获取群 {group_id} 成员列表失败: {e}")
                     continue
+
+            # 所有群都查询失败（如 OneBot WS 断连）：结果集合不可信。
+            # 若把空集交给调用方，全部绑定都会被误判为「不在群里」。
+            if queried == 0:
+                self.logger.warning(
+                    "[绑定系统] 所有群的成员列表均查询失败，"
+                    "无法判断成员归属，本次检查不可用"
+                )
+                return None
         except Exception as e:
             self.logger.error(f"获取群成员列表失败: {e}")
+            return None
 
         return member_id_set
 
@@ -801,12 +825,11 @@ class BoundSystem(BasicSystem):
             # 检查该用户是否还在其他群中
             all_member_ids = await self._get_member_in_all_groups()
 
-            # 成员列表不可用（如 QQ 官方直连无该接口）→ 无法判断，
-            # 跳过清理：否则空集会让条件恒成立，把所有绑定都清掉
+            # 成员列表不可用（平台不支持 / 未配置监听群 / 查询全部失败）→
+            # 无法判断，跳过清理：否则空集会让条件恒成立，把所有绑定都清掉
             if all_member_ids is None:
                 self.logger.info(
-                    f"[绑定系统] 无法获取群成员列表（平台不支持），"
-                    f"跳过用户 {user_id} 的退群清理"
+                    f"[绑定系统] 无法获取群成员列表，跳过用户 {user_id} 的退群清理"
                 )
                 return True
 
@@ -1198,13 +1221,14 @@ class BoundSystem(BasicSystem):
         """
         result = await self._get_extra_bound_member()
 
-        # 成员列表不可用（平台不支持，如 QQ 官方直连）→ 无法判断，
-        # 绝不能当成"全部多余"或"没有多余"
+        # 成员列表不可用（平台不支持 / 未配置监听群 / 查询全部失败）→
+        # 无法判断，绝不能当成"全部多余"或"没有多余"
         if result is None:
             await self.reply(
                 broadcast_info,
                 [MessageBuilder.text(
-                    "当前 QQ 平台不支持获取群成员列表，无法执行多余绑定检查。"
+                    "当前无法获取 QQ 群成员列表（平台不支持、未配置监听群，"
+                    "或查询全部失败），无法执行多余绑定检查。"
                     "如需清理，请手动在配置文件中核对绑定。"
                 )],
             )
@@ -1231,14 +1255,15 @@ class BoundSystem(BasicSystem):
         """
         result = await self._get_extra_bound_member()
 
-        # 成员列表不可用（平台不支持，如 QQ 官方直连）→ 拒绝执行。
-        # 若把它当成空集，命令会判定"全部绑定都是多余"并逐个删除——
-        # 这是数据丢失级的严重后果。
+        # 成员列表不可用（平台不支持 / 未配置监听群 / 查询全部失败）→
+        # 拒绝执行。若把它当成空集，命令会判定"全部绑定都是多余"并逐个
+        # 删除——这是数据丢失级的严重后果。
         if result is None:
             await self.reply(
                 broadcast_info,
                 [MessageBuilder.text(
-                    "当前 QQ 平台不支持获取群成员列表，无法判定多余绑定，"
+                    "当前无法获取 QQ 群成员列表（平台不支持、未配置监听群，"
+                    "或查询全部失败），无法判定多余绑定，"
                     "已跳过移除操作（避免误删全部绑定）。"
                     "如需清理，请手动在配置文件中核对绑定。"
                 )],

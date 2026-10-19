@@ -68,8 +68,11 @@ def test_official_bot_marks_member_list_unsupported():
 
 
 # ---------------------------------------------------------------- bound 系统
-def _make_bound(bot):
-    """构造一个只依赖 bot 的 BoundSystem（绕过完整初始化）。"""
+def _make_bound(bot, group_ids=("200000000001",), connector_ready=True, raise_exc=False):
+    """构造一个只依赖 bot 的 BoundSystem（绕过完整初始化）。
+
+    bot 为 None 时表示"连接器未就绪"；raise_exc=True 时成员列表查询抛异常。
+    """
     bs = BoundSystem.__new__(BoundSystem)
     bs.logger = FL()
 
@@ -82,17 +85,19 @@ def _make_bound(bot):
 
     bs.config = FC()
     bs.config["connector"] = {"QQ": {"permissions": {
-        "group_ids": ["200000000001"],
+        "group_ids": list(group_ids),
         "admin_group_ids": [],
     }}}
 
     class Bot:
         async def get_group_member_list(self, group_id, **kwargs):
+            if raise_exc:
+                raise RuntimeError("WebSocket disconnected")
             return bot
 
     class Conn:
         def __init__(self):
-            self.bot = Bot()
+            self.bot = Bot() if connector_ready else None
 
     class CM:
         def get_connector(self, source):
@@ -146,6 +151,69 @@ def test_normal_member_list_collected():
     result = loop.run_until_complete(bs._get_member_in_all_groups())
     assert result == {"100000000001", "100000000002"}, result
     print("PASS: 正常成员列表照常收集 ✅")
+
+
+def test_lenient_mode_without_groups_returns_none():
+    """宽松模式（未配置监听群）应返回 None，而不是空集。
+
+    未配置监听群时机器人转发所有群的消息，根本无从得知有哪些群、
+    成员是谁——当成空集会让「多余绑定检查」把全部绑定报为多余。
+    """
+    bs = _make_bound({"status": "ok", "data": []}, group_ids=())
+    result = loop.run_until_complete(bs._get_member_in_all_groups())
+    assert result is None, result
+    print("PASS: 未配置监听群（宽松模式）→ 返回 None ✅")
+
+
+def test_connector_not_ready_returns_none():
+    """连接器未就绪时结果不可信，必须返回 None。"""
+    bs = _make_bound(None, connector_ready=False)
+    result = loop.run_until_complete(bs._get_member_in_all_groups())
+    assert result is None, result
+    print("PASS: 连接器未就绪 → 返回 None ✅")
+
+
+def test_all_queries_failed_returns_none():
+    """所有群查询都失败（如 WS 断连）时，返回 None 而非空集。
+
+    否则每个失败群的成员都被当作「不在群里」，全部绑定会被误判。
+    """
+    bs = _make_bound(None, group_ids=("200000000001", "200000000002"),
+                     raise_exc=True)
+    result = loop.run_until_complete(bs._get_member_in_all_groups())
+    assert result is None, result
+    print("PASS: 所有群查询失败 → 返回 None ✅")
+
+
+def test_partial_query_failure_still_returns_set():
+    """部分群查询失败时仍返回已拿到的集合（不因个别失败全盘放弃）。"""
+    bs = _make_bound({"status": "ok", "data": [{"user_id": "100000000001"}]},
+                     group_ids=("200000000001",))
+    # 追加一个必然抛异常的群：直接改配置
+    bs.config["connector"]["QQ"]["permissions"]["group_ids"] = [
+        "200000000001", "200000000002"
+    ]
+    orig = bs.system_manager.connector_manager.get_connector
+
+    class CM2:
+        def get_connector(self, source):
+            c = orig(source)
+
+            class Bot2:
+                async def get_group_member_list(self, group_id, **kwargs):
+                    if group_id == "200000000002":
+                        raise RuntimeError("timeout")
+                    return {"status": "ok", "data": [{"user_id": "100000000001"}]}
+            c.bot = Bot2()
+            return c
+
+        async def broadcast_processed_info(self, info, include=None):
+            pass
+
+    bs.system_manager.connector_manager = CM2()
+    result = loop.run_until_complete(bs._get_member_in_all_groups())
+    assert result == {"100000000001"}, result
+    print("PASS: 部分群查询失败仍返回已拿到的集合 ✅")
 
 
 def test_remove_extra_bound_refuses_when_unsupported():
