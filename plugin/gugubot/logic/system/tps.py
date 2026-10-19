@@ -241,7 +241,16 @@ class TpsSystem(BasicSystem):
             }
 
             await self._broadcast_query_to_bridge_with_id(broadcast_info, query_id)
-            timeout = self.config.get_keys(["system", "tps", "bridge_timeout"], 3)
+            # bridge_timeout 来自用户配置：填成字符串会让 asyncio.sleep 抛
+            # TypeError（"3" 不是 float），整条查询失败——统一转 float
+            try:
+                timeout = float(self.config.get_keys(
+                    ["system", "tps", "bridge_timeout"], 3
+                ))
+            except (TypeError, ValueError):
+                timeout = 3.0
+            if timeout < 0:
+                timeout = 0.0
             await asyncio.sleep(timeout)
             await self._send_merged_result(query_id)
         except Exception as e:

@@ -1761,9 +1761,23 @@ class VoteSystem(BasicSystem):
             self.logger.info(f"[VoteSystem] 执行关闭服务器")
 
             # 当服务器中有其他不存在投票资格的玩家或存在其他投票议程时，赋予额外的准备时间
-            extra_countdown_time = self.config.get_keys(
-                ["system", "vote", "shutdown", "extra_countdown"], 0
-            )
+            # 数值来自用户配置：填成字符串（"10"）或非数字会让下面
+            # countdown + extra_countdown 抛 TypeError → 关服回调崩溃、
+            # 服务器不关。此处统一转 int，失败回默认。
+            try:
+                extra_countdown_time = int(self.config.get_keys(
+                    ["system", "vote", "shutdown", "extra_countdown"], 0
+                ))
+            except (TypeError, ValueError):
+                extra_countdown_time = 0
+            try:
+                countdown_base = int(self.config.get_keys(
+                    ["system", "vote", "shutdown", "countdown"], 10
+                ))
+            except (TypeError, ValueError):
+                countdown_base = 10
+            if countdown_base < 0:
+                countdown_base = 0
 
             if (
                 len(self._get_online_players()) - len(await self._get_eligible_voters())
@@ -1775,10 +1789,7 @@ class VoteSystem(BasicSystem):
                 extra_countdown = 0
 
             # 计算关服最终实际的倒计时时间
-            countdown_total_time = (
-                self.config.get_keys(["system", "vote", "shutdown", "countdown"], 10)
-                + extra_countdown
-            )
+            countdown_total_time = countdown_base + extra_countdown
 
             # 发送关闭通知
             msg = self.get_tr(

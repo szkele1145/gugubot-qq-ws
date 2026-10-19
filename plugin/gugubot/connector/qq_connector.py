@@ -38,6 +38,12 @@ class Bot:
 
     def __init__(self, send_message, max_wait_time: int = 9) -> None:
         self.send_message = send_message
+        # max_wait_time 来自配置，用户可能填成字符串（"5"）→ 比较运算
+        # 抛 TypeError → OneBot 请求跟踪全部失效。统一转 int 后再钳制。
+        try:
+            max_wait_time = int(max_wait_time)
+        except (TypeError, ValueError):
+            max_wait_time = 9
         self.max_wait_time = max_wait_time if 0 < max_wait_time <= 9 else 9
         self.function_return = {}
         self.pending_requests = {}

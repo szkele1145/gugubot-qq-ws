@@ -138,6 +138,12 @@ class WebSocketFactory:
         port = config.get_keys(
             ["connector", "minecraft_bridge", "connection", "port"], 8787
         )
+        # port 来自用户配置：填成字符串会导致底层 WebsocketServer 绑定失败
+        # （socket 库要求 int）。统一转换，失败回默认。
+        try:
+            port = int(port)
+        except (TypeError, ValueError):
+            port = 8787
 
         return WebSocketServer(
             host=host,

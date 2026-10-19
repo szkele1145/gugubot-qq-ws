@@ -73,7 +73,12 @@ class StyleManager:
 
         # 从配置中读取冷却时间设置
         if config:
-            self.cooldown = config.get_keys(["style", "style_cooldown"], 0)
+            # 用户可能填成字符串（"60"）→ 后续 `cooldown <= 0` 比较会抛
+            # TypeError（"60" 与 int 比较）→ 风格切换功能整体失效
+            try:
+                self.cooldown = int(config.get_keys(["style", "style_cooldown"], 0))
+            except (TypeError, ValueError):
+                self.cooldown = 0
 
         # 确保风格目录存在
         self._ensure_style_directory()

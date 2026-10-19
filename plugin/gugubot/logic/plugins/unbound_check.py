@@ -16,6 +16,7 @@ from mcdreforged.api.types import PluginServerInterface
 from gugubot.builder import MessageBuilder
 from gugubot.config import BasicConfig
 from gugubot.logic.system.basic_system import BasicSystem
+from gugubot.utils.num import safe_int
 from gugubot.utils.types import BroadcastInfo
 
 
@@ -263,9 +264,9 @@ class UnboundCheckSystem(BasicConfig, BasicSystem):
             group_ids = self.config.get_keys(
                 ["connector", "QQ", "permissions", "group_ids"], []
             )
-            timeout_days = self.config.get_keys(
+            timeout_days = safe_int(self.config.get_keys(
                 ["system", "unbound_check", "timeout_days"], 7
-            )
+            ), 7)
             timeout_seconds = timeout_days * 86400
             current_time = time.time()
             QQ_connector_name = self.config.get_keys(
@@ -399,9 +400,9 @@ class UnboundCheckSystem(BasicConfig, BasicSystem):
         admin_groups = notify_targets.get("admin_groups", True)
         origin_group = notify_targets.get("origin_group", False)
 
-        timeout_days = self.config.get_keys(
+        timeout_days = safe_int(self.config.get_keys(
             ["system", "unbound_check", "timeout_days"], 7
-        )
+        ), 7)
 
         # 构建通知消息
         for group_id, unbound_users in unbound_users_dict.items():
@@ -504,10 +505,10 @@ class UnboundCheckSystem(BasicConfig, BasicSystem):
         while self._schedule_task_running:
             try:
                 # 读取配置
-                last_check_time = self.get("last_check_time", 0)
-                check_interval = self.config.get_keys(
+                last_check_time = safe_int(self.get("last_check_time", 0), 0)
+                check_interval = safe_int(self.config.get_keys(
                     ["system", "unbound_check", "check_interval"], 86400
-                )
+                ), 86400)
 
                 # 计算下次检查时间
                 next_check_time = last_check_time + check_interval
@@ -592,9 +593,9 @@ class UnboundCheckSystem(BasicConfig, BasicSystem):
         让 ``wait_time`` 归零、下一轮立即执行首次检查。
         """
         if getattr(self, "_just_enabled", False):
-            interval = int(self.config.get_keys(
+            interval = safe_int(self.config.get_keys(
                 ["system", "unbound_check", "check_interval"], 86400
-            ))
+            ), 86400)
             self["last_check_time"] = int(time.time()) - interval
             self.save()
             # 清标：一次性语义，下轮循环自然按正常节奏走

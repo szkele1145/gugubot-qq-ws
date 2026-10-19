@@ -18,6 +18,7 @@ from mcdreforged.api.types import PluginServerInterface
 from gugubot.builder import MessageBuilder
 from gugubot.config import BasicConfig
 from gugubot.logic.system.basic_system import BasicSystem
+from gugubot.utils.num import safe_int
 from gugubot.utils.types import BroadcastInfo
 
 
@@ -339,9 +340,9 @@ class InactiveCheckSystem(BasicConfig, BasicSystem):
         """
         # 获取缓存配置（默认缓存 6 个月，因为 UUID 不会经常变化）
         # 6 个月 = 180 天 = 15,552,000 秒
-        cache_ttl = self.config.get_keys(
+        cache_ttl = safe_int(self.config.get_keys(
             ["system", "inactive_check", "bedrock_cache_ttl"], 15552000
-        )
+        ), 15552000)
 
         # 检查缓存
         bedrock_cache = self.get("bedrock_cache", {})
@@ -464,12 +465,12 @@ class InactiveCheckSystem(BasicConfig, BasicSystem):
             group_ids = self.config.get_keys(
                 ["connector", "QQ", "permissions", "group_ids"], []
             )
-            inactive_days = self.config.get_keys(
+            inactive_days = safe_int(self.config.get_keys(
                 ["system", "inactive_check", "inactive_days"], 30
-            )
-            never_played_days = self.config.get_keys(
+            ), 30)
+            never_played_days = safe_int(self.config.get_keys(
                 ["system", "inactive_check", "never_played_days"], 7
-            )
+            ), 7)
             inactive_seconds = inactive_days * 86400
             never_played_seconds = never_played_days * 86400
             current_time = time.time()
@@ -761,9 +762,9 @@ class InactiveCheckSystem(BasicConfig, BasicSystem):
         admin_groups = notify_targets.get("admin_groups", True)
         origin_group = notify_targets.get("origin_group", False)
 
-        inactive_days = self.config.get_keys(
+        inactive_days = safe_int(self.config.get_keys(
             ["system", "inactive_check", "inactive_days"], 30
-        )
+        ), 30)
 
         # 构建通知消息
         for group_id, players_data in inactive_players_dict.items():
@@ -817,9 +818,9 @@ class InactiveCheckSystem(BasicConfig, BasicSystem):
                 # 2. 从未进入游戏玩家部分
                 if never_played_players:
                     never_played_list = []
-                    never_played_days_config = self.config.get_keys(
+                    never_played_days_config = safe_int(self.config.get_keys(
                         ["system", "inactive_check", "never_played_days"], 7
-                    )
+                    ), 7)
                     for player in never_played_players:
                         qq_accounts_str = ", ".join(
                             str(qq) for qq in player["qq_accounts"]
@@ -919,10 +920,10 @@ class InactiveCheckSystem(BasicConfig, BasicSystem):
         while self._schedule_task_running:
             try:
                 # 读取配置
-                last_check_time = self.get("last_check_time", 0)
-                check_interval = self.config.get_keys(
+                last_check_time = safe_int(self.get("last_check_time", 0), 0)
+                check_interval = safe_int(self.config.get_keys(
                     ["system", "inactive_check", "check_interval"], 86400
-                )
+                ), 86400)
 
                 # 计算下次检查时间
                 next_check_time = last_check_time + check_interval
@@ -1024,9 +1025,9 @@ class InactiveCheckSystem(BasicConfig, BasicSystem):
         让 ``wait_time`` 归零、下一轮立即执行首次检查。
         """
         if getattr(self, "_just_enabled", False):
-            interval = int(self.config.get_keys(
+            interval = safe_int(self.config.get_keys(
                 ["system", "inactive_check", "check_interval"], 86400
-            ))
+            ), 86400)
             self["last_check_time"] = int(time.time()) - interval
             self.save()
             try:

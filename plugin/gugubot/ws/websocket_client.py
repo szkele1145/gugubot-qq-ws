@@ -109,6 +109,19 @@ class WebSocketClient:
         """
         self.logger.debug(f"正在连接到WebSocket服务器: {self.url}")
 
+        # reconnect / ping_interval / ping_timeout 均来自用户配置，可能被填成
+        # 字符串（"5"）——下面的 `> 0` 比较会抛 TypeError，导致连接直接建立
+        # 失败（启动阶段崩溃）。统一转 int，失败回退默认。
+        def _as_int(value, default):
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return default
+
+        reconnect = _as_int(reconnect, 5)
+        ping_interval = _as_int(ping_interval, 20)
+        ping_timeout = _as_int(ping_timeout, 10)
+
         self.ws = websocket.WebSocketApp(
             self.url,
             header=self.headers,
