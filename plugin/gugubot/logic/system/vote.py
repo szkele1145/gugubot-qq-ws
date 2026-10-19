@@ -7,7 +7,7 @@
 import asyncio
 import time
 import traceback
-from typing import Optional, Set, List
+from typing import Optional, Set, List, Dict
 
 from mcdreforged.api.types import PluginServerInterface
 
@@ -79,6 +79,69 @@ class VoteSystem(BasicSystem):
 
         # 当前投票监控任务（vote_id -> Task，支持多个并发投票）
         self._monitor_tasks: dict[str, asyncio.Task] = {}
+
+    def reload_config(self) -> List[str]:
+        """配置热重载后重新读取投票关键词与投票类型注册。
+
+        投票关键词（yes/no/withdraw/delete）在 ``__init__._load_config``
+        缓存为实例属性；shutdown 投票类型的注册参数（比例/超时/关键词）
+        在 ``initialize`` 一次性读入注册表——这两类值热重载后都需要
+        显式重建，否则改配置不生效。
+        """
+        old = (self.yes_keywords, self.no_keywords,
+               self.withdraw_keywords, self.delete_keywords)
+        self._load_config()
+        self.debug_enabled = self.config.get_keys(
+            ["GUGUBot", "show_message_in_console"], False
+        )
+
+        changed = []
+        if (self.yes_keywords, self.no_keywords,
+                self.withdraw_keywords, self.delete_keywords) != old:
+            changed.append("vote.keywords")
+        if self._rebuild_vote_types():
+            changed.append("vote.shutdown")
+        return changed
+
+    def _rebuild_vote_types(self) -> bool:
+        """重建默认投票类型注册（热重载用）。
+
+        先注销再按当前配置重注册内置类型，避免旧参数残留。
+        进行中的投票不受影响（监控任务已持有创建时的参数快照）。
+
+        Returns
+        -------
+        bool
+            是否发生了需要提示用户的变更（注册表内容变化即视为变更）。
+        """
+        old_snapshot = self._snapshot_vote_types()
+
+        # 注销旧的内置类型（用公开 API，关键词映射会一并清理）
+        for vt in list(self._builtin_vote_types()):
+            self.vote_type_registry.unregister(vt)
+        # 按当前配置重新注册
+        self._register_default_vote_types()
+
+        return self._snapshot_vote_types() != old_snapshot
+
+    def _builtin_vote_types(self) -> List[str]:
+        """内置投票类型标识列表（热重载重建时按此注销）。"""
+        return ["shutdown"]
+
+    def _snapshot_vote_types(self) -> Dict:
+        """当前注册表内容的可比较快照（用于判断是否发生变化）。"""
+        snapshot = {}
+        for vt in self._builtin_vote_types():
+            cfg = self.vote_type_registry.get_config(vt)
+            if cfg is None:
+                snapshot[vt] = None
+            else:
+                snapshot[vt] = (
+                    cfg.name_key, cfg.description_key, cfg.required_percentage,
+                    cfg.timeout, tuple(cfg.start_keywords),
+                    tuple(cfg.consult_keywords), cfg.enabled,
+                )
+        return snapshot
 
     def debug_log(self, message: str) -> None:
         """输出调试日志（仅在debug_enabled为True时）

@@ -115,6 +115,7 @@ class ConfigReloadSystem(BasicSystem):
 
         lines: List[str] = [f"配置重载成功 ✅\n{msg}"]
         lines.extend(self._sync_enable_states())
+        lines.extend(self._reload_system_caches())
         lines.extend(self._connector_notes())
 
         if self.logger:
@@ -158,6 +159,41 @@ class ConfigReloadSystem(BasicSystem):
 
         if changed:
             notes.append("系统开关已同步: " + "、".join(changed))
+        return notes
+
+    def _reload_system_caches(self) -> List[str]:
+        """调用各系统的 ``reload_config()`` 钩子，重新读取被缓存的配置值。
+
+        大多数系统在运行时才读配置，热重载自动生效；但把配置缓存成实例
+        属性的系统（如投票系统的关键词/投票类型注册）必须显式重建，
+        否则改了配置也不生效。钩子由 :meth:`BasicSystem.reload_config`
+        提供默认空实现，只有需要重建的系统才覆写。
+        """
+        notes: List[str] = []
+        manager = getattr(self, "system_manager", None)
+        systems = getattr(manager, "systems", None) if manager else None
+        if not systems:
+            return notes
+
+        for system in systems:
+            if system.name == "config_reload":
+                continue
+            hook = getattr(system, "reload_config", None)
+            if hook is None:
+                continue
+            try:
+                changed = hook()
+            except Exception as e:
+                if self.logger:
+                    self.logger.error(
+                        f"[GUGUBot] 系统 {system.name} 重载配置失败: {e}"
+                    )
+                notes.append(f"⚠️ {system.name} 重载失败: {e}")
+                continue
+            if changed:
+                notes.append(
+                    f"{system.name} 已重新加载: " + "、".join(str(c) for c in changed)
+                )
         return notes
 
     def _connector_notes(self) -> List[str]:

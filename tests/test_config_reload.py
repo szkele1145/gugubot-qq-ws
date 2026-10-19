@@ -219,3 +219,80 @@ def test_default_template_is_not_reloadable(tmp_path):
     assert "默认模板" in msg, msg
     assert fresh.get("GUGUBot", {}).get("command_prefix") == "#", fresh.get("GUGUBot")
     print("PASS: 默认模板 → 拒绝重载且不破坏内存配置")
+
+
+# ---------------------------------------------------------------- reload_config 钩子
+def test_vote_system_caches_are_rebuilt(tmp_path):
+    """投票系统把关键词/投票类型缓存成实例属性，热重载必须重建。"""
+    system, cfg, cfg_path = make_system(str(tmp_path))
+
+    # 用真实的 VoteSystem 实例（__new__ 跳过 server 依赖），确保测的是真代码路径
+    from gugubot.logic.system.vote import VoteSystem
+    from gugubot.utils.vote_manager import VoteTypeRegistry
+
+    vote = VoteSystem.__new__(VoteSystem)
+    vote.name = "vote"
+    vote.enable = True
+    vote.logger = FL()
+    vote.config = cfg
+    vote.vote_type_registry = VoteTypeRegistry()
+    vote.debug_enabled = False
+    vote._monitor_tasks = {}
+
+    # 用真实 _load_config 填充初始关键词
+    vote._load_config()
+    assert vote.yes_keywords == ["111", "同意", "赞成", "yes"], vote.yes_keywords
+
+    # 初始注册 shutdown 投票类型（真实路径）
+    vote._register_default_vote_types()
+    sc0 = vote.vote_type_registry.get_config("shutdown")
+    assert sc0 is not None and sc0.required_percentage == 1.0, sc0
+    assert sc0.timeout == 300, sc0
+
+    # 配置里给 vote 换关键词 + 换 shutdown 参数
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        f.write(
+            "GUGUBot:\n  command_prefix: '#'\n"
+            "system:\n  echo: {enable: true}\n"
+            "  vote:\n"
+            "    keywords:\n"
+            "      yes: ['好的', '可以']\n"
+            "    shutdown:\n"
+            "      required_percentage: 0.8\n"
+            "      timeout: 120\n"
+            "      enable: true\n"
+        )
+    REPLIES.clear()
+    r = loop.run_until_complete(system.process_broadcast_info(mk_info(True)))
+    assert r is True and REPLIES
+    # 先验证配置已进内存
+    assert cfg.get_keys(["system", "vote", "keywords", "yes"]) == ["好的", "可以"]
+
+    # 把 vote 塞进 system_manager，钩子应重建其缓存
+    system.system_manager.systems.append(vote)
+    changed = system._reload_system_caches()
+    assert vote.yes_keywords == ["好的", "可以"], vote.yes_keywords
+    sc = vote.vote_type_registry.get_config("shutdown")
+    assert sc is not None and sc.required_percentage == 0.8, sc
+    assert sc.timeout == 120, sc
+    assert any("vote" in c for c in changed), changed
+    print("PASS: vote 缓存经 reload_config 钩子重建 ✅")
+
+
+def test_reload_config_hook_failure_is_reported(tmp_path):
+    """某个系统 reload_config 抛异常不应炸掉整个重载流程。"""
+    system, cfg, cfg_path = make_system(str(tmp_path))
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        f.write("GUGUBot:\n  command_prefix: '#'\nsystem:\n  echo:\n    enable: true\n")
+
+    class BadSystem:
+        name = "bad_system"
+        enable = True
+
+        def reload_config(self):
+            raise RuntimeError("boom")
+
+    system.system_manager.systems.append(BadSystem())
+    notes = system._reload_system_caches()
+    assert any("bad_system" in n and "重载失败" in n for n in notes), notes
+    print("PASS: 单系统重载异常被隔离并提示 ✅")

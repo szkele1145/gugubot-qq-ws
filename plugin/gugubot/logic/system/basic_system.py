@@ -57,6 +57,22 @@ class BasicSystem:
         """
         pass
 
+    def reload_config(self) -> List[str]:
+        """配置热重载后重新读取本系统缓存的配置值。
+
+        大多数系统在运行时才读配置（``self.config.get_keys(...)``），
+        热重载后自动生效，无需覆写本方法。
+
+        但若系统把配置值**缓存成了实例属性**（构造期或 ``initialize()``
+        期读取一次），就必须覆写本方法重新读取，否则热重载对该系统无效。
+
+        Returns
+        -------
+        List[str]
+            本次重载实际变更的项（用于给用户反馈），空列表表示无变更。
+        """
+        return []
+
     async def process_broadcast_info(self, broadcast_info: BroadcastInfo) -> bool:
         """处理接收到的命令。
 
