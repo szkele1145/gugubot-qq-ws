@@ -163,6 +163,33 @@ assert "未绑定检查" in text and "将不生效" in text, text
 print("PASS: 官方模式启用未绑定检查 → 提示不生效 ⚠️")
 cfg["system"] = {}
 
+# ---- 3.8) max_message_length <= 0 → 提示分片死循环风险 ----
+cfg["connector"]["QQ"]["max_message_length"] = 0
+REPLIES.clear()
+r = loop.run_until_complete(system.process_broadcast_info(mk_info(True)))
+assert r is True and REPLIES
+text = REPLIES[0][0]["data"]["text"]
+assert "max_message_length" in text and "存在问题" in text, text
+print("PASS: max_message_length<=0 → 提示死循环风险 ❌")
+
+# ---- 3.9) max_message_length 非数字 → 提示回退默认 ----
+cfg["connector"]["QQ"]["max_message_length"] = "不是数字"
+REPLIES.clear()
+r = loop.run_until_complete(system.process_broadcast_info(mk_info(True)))
+assert r is True and REPLIES
+text = REPLIES[0][0]["data"]["text"]
+assert "不是数字" in text, text
+print("PASS: max_message_length 非数字 → 提示回退默认 ❌")
+
+# ---- 3.10) max_message_length 正常值 → 通过 ----
+cfg["connector"]["QQ"]["max_message_length"] = 2000
+REPLIES.clear()
+r = loop.run_until_complete(system.process_broadcast_info(mk_info(True)))
+assert r is True and REPLIES
+text = REPLIES[0][0]["data"]["text"]
+assert "max_message_length: 2000" in text, text
+print("PASS: max_message_length 正常 → 通过 ✅")
+
 # ---- 4) 官方直连但连接器未启动 → 存在问题 ----
 system._connector_manager = types.SimpleNamespace(connectors=[])
 REPLIES.clear()

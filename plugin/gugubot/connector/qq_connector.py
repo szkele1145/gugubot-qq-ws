@@ -283,6 +283,16 @@ class QQWebSocketConnector(BasicConnector):
 
     def _split_message(self, message: list, max_length: int = 2000) -> list[list]:
         """Split a message into parts that each fit within *max_length*."""
+        # max_length 来自配置（connector.QQ.max_message_length），用户可能填 0
+        # 或负数：此时 space=0 → chunk 恒为空串 → text 不缩短 → 死循环，
+        # 会直接挂死 MCDR 事件循环（不是抛异常）。此处钳制为正整数。
+        try:
+            max_length = int(max_length)
+        except (TypeError, ValueError):
+            max_length = 2000
+        if max_length <= 0:
+            max_length = 2000
+
         total = sum(self._get_item_length(m) for m in message if isinstance(m, dict))
         if total <= max_length:
             return [message]

@@ -583,12 +583,20 @@ class QQOfficialConnector(BasicConnector):
         message_parts = self._split_message(message, max_length=max_message_length)
 
         # 节流参数循环外一次读取
-        t_min = float(self.config.get_keys(
-            ["connector", "QQ", "connection", "official", "send_throttle_min"], 0.5
-        ))
-        t_max = float(self.config.get_keys(
-            ["connector", "QQ", "connection", "official", "send_throttle_max"], 1.5
-        ))
+        # 用户可能把配置写成非数字字符串（如 "0.5 秒"）→ float() 抛 ValueError
+        # 会让整条消息发送失败；此处兜底回默认值
+        try:
+            t_min = float(self.config.get_keys(
+                ["connector", "QQ", "connection", "official", "send_throttle_min"], 0.5
+            ))
+        except (TypeError, ValueError):
+            t_min = 0.5
+        try:
+            t_max = float(self.config.get_keys(
+                ["connector", "QQ", "connection", "official", "send_throttle_max"], 1.5
+            ))
+        except (TypeError, ValueError):
+            t_max = 1.5
         if t_max < t_min:
             t_min, t_max = t_max, t_min
         multi_part_throttle = len(message_parts) > 1
@@ -852,6 +860,16 @@ class QQOfficialConnector(BasicConnector):
         return self._TYPE_LENGTHS.get(item.get("type"), self._TYPE_LENGTHS["default"])
 
     def _split_message(self, message: list, max_length: int = 2000) -> list:
+        # max_length 来自配置（connector.QQ.max_message_length），用户可能填 0
+        # 或负数：此时 space=0 → chunk 恒为空串 → text 不缩短 → 死循环，
+        # 会直接挂死 MCDR 事件循环（不是抛异常）。此处钳制为正整数。
+        try:
+            max_length = int(max_length)
+        except (TypeError, ValueError):
+            max_length = 2000
+        if max_length <= 0:
+            max_length = 2000
+
         total = sum(self._get_item_length(m) for m in message if isinstance(m, dict))
         if total <= max_length:
             return [message]

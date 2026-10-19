@@ -186,6 +186,26 @@ class ConfigCheckSystem(BasicSystem):
         else:
             lines.append(f"official.intents: {', '.join(enabled_intents)} ✅")
 
+        # max_message_length：<=0 曾会导致发送分片死循环（挂死事件循环），
+        # 运行期已钳制回默认值；配置检查阶段给出明确提示
+        mml = self.config.get_keys(
+            ["connector", "QQ", "max_message_length"], 2000
+        )
+        try:
+            mml_val = int(mml)
+        except (TypeError, ValueError):
+            ok = False
+            lines.append(f"max_message_length: {mml!r} 不是数字 ❌（将回退默认 2000）")
+        else:
+            if mml_val <= 0:
+                ok = False
+                lines.append(
+                    f"max_message_length: {mml_val} ≤ 0 ❌"
+                    "（会导致分片死循环，运行期已强制回退默认 2000，请修正配置）"
+                )
+            else:
+                lines.append(f"max_message_length: {mml_val} ✅")
+
         # 运行期连接器是否存在（官方模式下应当有 id_mapper + ws_client）
         official_connector = None
         if self._connector_manager:
