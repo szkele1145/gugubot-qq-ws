@@ -296,3 +296,95 @@ def test_reload_config_hook_failure_is_reported(tmp_path):
     notes = system._reload_system_caches()
     assert any("bad_system" in n and "重载失败" in n for n in notes), notes
     print("PASS: 单系统重载异常被隔离并提示 ✅")
+
+
+# ---------------------------------------------------------------- 重载后自动语义校验
+class FakeChecker:
+    """ConfigCheckSystem 的行为替身：_check_* 返回可注入的结果。"""
+    name = "config_check"
+
+    def __init__(self, syntax_ok=True, general=None, qq=None):
+        self._syntax_ok = syntax_ok
+        self._general = general or {"ok": True, "lines": []}
+        self._qq = qq or {"ok": True, "lines": []}
+
+    def _check_syntax(self):
+        return self._syntax_ok, "" if self._syntax_ok else "bad yaml"
+
+    def _check_general(self):
+        return self._general
+
+    def _check_qq_connector(self):
+        return self._qq
+
+
+def attach_checker(system, checker):
+    """给 system_manager 装一个能返回 checker 的 get_system（保留 systems 列表）。"""
+    manager = system.system_manager
+
+    def _get_system(name):
+        return checker if name == "config_check" else None
+
+    manager.get_system = _get_system
+
+
+def test_auto_check_reports_problems(tmp_path):
+    """重载成功但配置有问题 → 反馈里带问题清单。"""
+    system, cfg, _ = make_system(str(tmp_path))
+    attach_checker(system, FakeChecker(
+        general={"ok": False, "lines": ["admin_ids: 未配置 ⚠️ （建议至少填一个）"]},
+        qq={"ok": False, "lines": ["official.appid: 未配置 ❌（官方直连必填）"]},
+    ))
+    with open(system.config.path, "w", encoding="utf-8") as f:
+        f.write("GUGUBot:\n  command_prefix: '#'\nsystem:\n  echo:\n    enable: true\n")
+    REPLIES.clear()
+    r = loop.run_until_complete(system.process_broadcast_info(mk_info(True)))
+    assert r is True and REPLIES
+    text = REPLIES[0][0]["data"]["text"]
+    assert "重载成功" in text
+    assert "语义校验: 发现 2 处问题" in text, text
+    assert "admin_ids" in text and "official.appid" in text
+    print("PASS: 重载反馈自动附带语义校验问题清单 ✅")
+
+
+def test_auto_check_all_pass(tmp_path):
+    system, cfg, _ = make_system(str(tmp_path))
+    attach_checker(system, FakeChecker())
+    with open(system.config.path, "w", encoding="utf-8") as f:
+        f.write("GUGUBot:\n  command_prefix: '#'\nsystem:\n  echo:\n    enable: true\n")
+    REPLIES.clear()
+    loop.run_until_complete(system.process_broadcast_info(mk_info(True)))
+    text = REPLIES[0][0]["data"]["text"]
+    assert "语义校验: 全部通过" in text, text
+    print("PASS: 语义校验全部通过时反馈 ✅")
+
+
+def test_auto_check_survives_checker_crash(tmp_path):
+    """校验器内部异常不影响重载结果。"""
+    system, cfg, _ = make_system(str(tmp_path))
+
+    class CrashChecker(FakeChecker):
+        def _check_general(self):
+            raise RuntimeError("boom")
+
+    attach_checker(system, CrashChecker())
+    with open(system.config.path, "w", encoding="utf-8") as f:
+        f.write("GUGUBot:\n  command_prefix: '#'\nsystem:\n  echo:\n    enable: true\n")
+    REPLIES.clear()
+    r = loop.run_until_complete(system.process_broadcast_info(mk_info(True)))
+    assert r is True
+    text = REPLIES[0][0]["data"]["text"]
+    assert "重载成功" in text and "语义校验" not in text, text
+    print("PASS: 校验器崩溃不影响重载 ✅")
+
+
+def test_auto_check_skipped_without_checker(tmp_path):
+    """config_check 未注册时跳过校验（不报错）。"""
+    system, cfg, _ = make_system(str(tmp_path))
+    with open(system.config.path, "w", encoding="utf-8") as f:
+        f.write("GUGUBot:\n  command_prefix: '#'\nsystem:\n  echo:\n    enable: true\n")
+    REPLIES.clear()
+    r = loop.run_until_complete(system.process_broadcast_info(mk_info(True)))
+    assert r is True
+    assert "语义校验" not in REPLIES[0][0]["data"]["text"]
+    print("PASS: 无校验器时跳过 ✅")

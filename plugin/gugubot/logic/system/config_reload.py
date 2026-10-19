@@ -116,6 +116,7 @@ class ConfigReloadSystem(BasicSystem):
         lines: List[str] = [f"配置重载成功 ✅\n{msg}"]
         lines.extend(self._sync_enable_states())
         lines.extend(self._reload_system_caches())
+        lines.extend(self._run_config_check())
         lines.extend(self._connector_notes())
 
         if self.logger:
@@ -216,3 +217,45 @@ class ConfigReloadSystem(BasicSystem):
                 break
 
         return notes
+
+    # ------------------------------------------------------------------ #
+    # 重载后自动语义校验
+    # ------------------------------------------------------------------ #
+
+    def _run_config_check(self) -> List[str]:
+        """重载成功后自动跑一遍 `#配置检验` 的语义检查并汇总结论。
+
+        改配置 → 热重载是"我改的东西对不对"的典型时刻——把校验结果
+        直接带进重载反馈，用户无需再发一次 `#配置检验`。检查器缺位
+        （未注册/异常）时静默跳过，不影响重载本身。
+        """
+        manager = getattr(self, "system_manager", None)
+        getter = getattr(manager, "get_system", None)
+        checker = getter("config_check") if getter else None
+        if checker is None:
+            return []
+
+        try:
+            syntax_ok, _ = checker._check_syntax()
+            general = checker._check_general()
+            qq = checker._check_qq_connector()
+        except Exception:
+            # 校验器内部异常不应影响重载结果
+            return []
+
+        problems: List[str] = []
+        if not syntax_ok:
+            problems.append("配置语法异常")
+        for section in (general, qq):
+            for line in section.get("lines", []):
+                if ("❌" in line or "⚠️" in line) and line.strip():
+                    problems.append(line.strip())
+
+        if not problems:
+            return ["", "语义校验: 全部通过 ✅"]
+
+        head = ["", f"语义校验: 发现 {len(problems)} 处问题 ❌"]
+        head.extend(f"  {p}" for p in problems[:6])
+        if len(problems) > 6:
+            head.append(f"  ...共 {len(problems)} 处，详见 #配置检验")
+        return head
