@@ -370,6 +370,44 @@ class QQOfficialConnector(BasicConnector):
         self.ws_client: Optional[QQOfficialWSClient] = None
         self.bot = QQOfficialBot(self)
 
+    def reload_config(self) -> list:
+        """配置热重载后重新登记监听群与刷新收发开关。
+
+        - 调 :meth:`BasicConnector.reload_config` 刷新 enable/enable_receive/
+          enable_send 三个构造期缓存；
+        - **重新登记监听群**：配置里新增的群号/openid 会进入 id_mapper 的
+          绑定槽位（在群里 @机器人 说句话即可自动绑定），已绑定关系保持
+          不变——这是官方模式热重载里最有价值的部分：加监听群免重启。
+        - appid/secret/intents 属连接级参数，无法热生效（连接器已在运行），
+          由 ConfigReloadSystem 的固定提示兜底说明。
+        """
+        changed = super().reload_config()
+
+        config = self.config
+        group_ids = config.get_keys(["connector", "QQ", "permissions", "group_ids"], [])
+        forward_ids = config.get_keys(
+            ["connector", "QQ", "permissions", "forward_group_ids"], []
+        )
+        admin_groups = config.get_keys(
+            ["connector", "QQ", "permissions", "admin_group_ids"], []
+        )
+        notice_groups = config.get_keys(
+            ["connector", "QQ", "permissions", "notice_forward_groups"], []
+        )
+        cross_groups = config.get_keys(
+            ["system", "cross_broadcast", "qq_forward_group_ids"], []
+        )
+        try:
+            self.id_mapper.register_legacy_groups(
+                group_ids + forward_ids + admin_groups + notice_groups + cross_groups
+            )
+            changed.append("官方直连监听群已重新登记（新群需在群内 @机器人 完成绑定）")
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"{self.log_prefix} 热重载重新登记监听群失败: {e}")
+            changed.append(f"⚠️ 监听群重新登记失败: {e}")
+        return changed
+
     # ------------------------------------------------------------------ #
     # 配置辅助
     # ------------------------------------------------------------------ #

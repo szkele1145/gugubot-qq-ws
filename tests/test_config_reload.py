@@ -388,3 +388,117 @@ def test_auto_check_skipped_without_checker(tmp_path):
     assert r is True
     assert "语义校验" not in REPLIES[0][0]["data"]["text"]
     print("PASS: 无校验器时跳过 ✅")
+
+
+# ---------------------------------------------------------------- 连接器热重载
+def test_connector_enable_switches_refreshed(tmp_path):
+    """连接器把 enable/enable_receive/enable_send 缓存成构造期属性，
+    热重载后必须刷新，否则在配置里关掉连接器不生效。"""
+    system, cfg, cfg_path = make_system(str(tmp_path))
+
+    from gugubot.connector.basic_connector import BasicConnector
+
+    class FakeConn(BasicConnector):
+        async def connect(self): pass
+        async def disconnect(self): pass
+        async def send_message(self, processed_info): pass
+        async def on_message(self, raw): pass
+
+    conn = FakeConn(source="QQ", config=cfg)
+    conn.enable = True
+    conn.enable_receive = True
+    conn.enable_send = True
+
+    class CM:
+        connectors = [conn]
+
+    system._connector_manager = CM()
+
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        f.write(
+            "GUGUBot:\n  command_prefix: '#'\n"
+            "connector:\n  QQ:\n    enable: true\n"
+            "    enable_receive: false\n"
+            "    enable_send: false\n"
+            "system:\n  echo:\n    enable: true\n"
+        )
+    REPLIES.clear()
+    r = loop.run_until_complete(system.process_broadcast_info(mk_info(True)))
+    assert r is True and REPLIES
+    text = REPLIES[0][0]["data"]["text"]
+    assert conn.enable_receive is False, conn.enable_receive
+    assert conn.enable_send is False, conn.enable_send
+    assert "连接器 QQ 已重新加载" in text, text
+    print("PASS: 连接器收发开关经热重载刷新 ✅")
+
+
+def test_official_connector_reregisters_groups(tmp_path):
+    """官方直连连接器热重载后应重新登记监听群（加群免重启）。"""
+    system, cfg, cfg_path = make_system(str(tmp_path))
+
+    from gugubot.connector.qq_official.connector import QQOfficialConnector
+
+    class FakeMapper:
+        def __init__(self):
+            self.registered = None
+
+        def register_legacy_groups(self, ids):
+            self.registered = list(ids or [])
+
+    conn = QQOfficialConnector.__new__(QQOfficialConnector)
+    conn.config = cfg
+    conn.logger = FL()
+    conn.source = "QQ"
+    conn.enable = True
+    conn.enable_receive = True
+    conn.enable_send = True
+    conn.id_mapper = FakeMapper()
+
+    class CM:
+        connectors = [conn]
+
+    system._connector_manager = CM()
+
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        f.write(
+            "GUGUBot:\n  command_prefix: '#'\n"
+            "connector:\n  QQ:\n    permissions:\n"
+            "      group_ids: ['100000000001']\n"
+            "      forward_group_ids: ['200000000002']\n"
+            "system:\n  echo:\n    enable: true\n"
+        )
+    REPLIES.clear()
+    r = loop.run_until_complete(system.process_broadcast_info(mk_info(True)))
+    assert r is True and REPLIES
+    registered = conn.id_mapper.registered
+    assert registered is not None, "监听群未重新登记"
+    assert "100000000001" in registered, registered
+    assert "200000000002" in registered, registered
+    text = REPLIES[0][0]["data"]["text"]
+    assert "监听群已重新登记" in text, text
+    print("PASS: 官方直连监听群经热重载重新登记 ✅")
+
+
+def test_connector_reload_failure_is_isolated(tmp_path):
+    """某个连接器 reload_config 抛异常不影响重载结果。"""
+    system, cfg, cfg_path = make_system(str(tmp_path))
+
+    class BadConn:
+        source = "QQ"
+
+        def reload_config(self):
+            raise RuntimeError("boom")
+
+    class CM:
+        connectors = [BadConn()]
+
+    system._connector_manager = CM()
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        f.write("GUGUBot:\n  command_prefix: '#'\nsystem:\n  echo:\n    enable: true\n")
+    REPLIES.clear()
+    r = loop.run_until_complete(system.process_broadcast_info(mk_info(True)))
+    assert r is True
+    text = REPLIES[0][0]["data"]["text"]
+    assert "重载成功" in text
+    assert "连接器 QQ 重载失败" in text, text
+    print("PASS: 连接器重载异常被隔离并提示 ✅")

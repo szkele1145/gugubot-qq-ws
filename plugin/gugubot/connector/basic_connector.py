@@ -56,6 +56,38 @@ class BasicConnector(ABC):
             ["connector", self.source, "enable_send"], self.enable
         )
 
+    def reload_config(self) -> list:
+        """配置热重载后重新读取本连接器缓存的配置值。
+
+        :meth:`__init__` 把 ``enable`` / ``enable_receive`` / ``enable_send``
+        缓存成了实例属性（构造期读一次），热重载后必须刷新，否则在配置里
+        关掉某连接器不会立即生效。
+
+        Returns
+        -------
+        list
+            本次重载实际变更的项（用于给用户反馈），空列表表示无变更。
+        """
+        if not self.config:
+            return []
+        changed = []
+        for attr, label, key_path, default in (
+            ("enable", "enable", ["connector", self.source, "enable"], True),
+            ("enable_receive", "enable_receive",
+             ["connector", self.source, "enable_receive"], None),
+            ("enable_send", "enable_send",
+             ["connector", self.source, "enable_send"], None),
+        ):
+            old = getattr(self, attr, None)
+            if default is None:
+                # enable_receive / enable_send 未显式配置时跟随 enable
+                default = self.enable
+            new = self.config.get_keys(key_path, default)
+            if old != new:
+                setattr(self, attr, new)
+                changed.append(f"{self.source}.{label}={'开' if new else '关'}")
+        return changed
+
     @property
     def parser(self) -> Optional[BasicParser]:
         """Parser instance.

@@ -116,6 +116,7 @@ class ConfigReloadSystem(BasicSystem):
         lines: List[str] = [f"配置重载成功 ✅\n{msg}"]
         lines.extend(self._sync_enable_states())
         lines.extend(self._reload_system_caches())
+        lines.extend(self._reload_connectors())
         lines.extend(self._run_config_check())
         lines.extend(self._connector_notes())
 
@@ -206,16 +207,50 @@ class ConfigReloadSystem(BasicSystem):
             return notes
 
         for c in connectors:
-            name = getattr(c, "source", "?")
-            # 官方直连连接器：appid/secret/intents/监听群均为构造期参数
+            # 官方直连连接器：appid/secret/intents 属连接级参数
             if hasattr(c, "id_mapper") and hasattr(c, "ws_client"):
                 notes.append(
-                    f"⚠️ QQ 官方直连连接器的 appid/secret/intents/监听群"
-                    f"属于启动期参数，改动这些需要 ``!!MCDR reload plugin``；"
-                    f"普通系统开关与转发规则已即时生效。"
+                    "⚠️ QQ 官方直连的 appid/secret/intents 属连接级参数，"
+                    "改动需要 ``!!MCDR reload plugin``；监听群与各系统开关已即时生效"
                 )
                 break
 
+        return notes
+
+    def _reload_connectors(self) -> List[str]:
+        """调用各连接器的 ``reload_config()`` 钩子。
+
+        连接器把 ``enable``/``enable_receive``/``enable_send`` 缓存成了
+        构造期属性，不刷新则"在配置里关掉某连接器"不生效；官方直连连接器
+        还会重新登记监听群（加群免重启）。
+        """
+        notes: List[str] = []
+        cm = self._connector_manager
+        connectors = getattr(cm, "connectors", None) if cm else None
+        if not connectors:
+            return notes
+
+        for c in connectors:
+            hook = getattr(c, "reload_config", None)
+            if hook is None:
+                continue
+            try:
+                changed = hook()
+            except Exception as e:
+                if self.logger:
+                    self.logger.error(
+                        f"[GUGUBot] 连接器 {getattr(c, 'source', '?')} "
+                        f"重载配置失败: {e}"
+                    )
+                notes.append(
+                    f"⚠️ 连接器 {getattr(c, 'source', '?')} 重载失败: {e}"
+                )
+                continue
+            if changed:
+                notes.append(
+                    f"连接器 {getattr(c, 'source', '?')} 已重新加载: "
+                    + "、".join(str(x) for x in changed)
+                )
         return notes
 
     # ------------------------------------------------------------------ #
