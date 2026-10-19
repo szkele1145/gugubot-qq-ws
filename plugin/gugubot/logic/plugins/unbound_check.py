@@ -541,6 +541,10 @@ class UnboundCheckSystem(BasicConfig, BasicSystem):
                 # 检查依赖
                 if not self.qq_connector or not self.bound_system:
                     self.logger.warning("依赖系统未初始化，跳过本次检查")
+                    # 更新检查时间，否则 wait_time 已归零，continue 后
+                    # 下一轮立即到点 → 1 秒级忙等并刷屏 warning
+                    self["last_check_time"] = int(time.time())
+                    self.save()
                     continue
 
                 # 执行检查
