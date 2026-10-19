@@ -575,3 +575,32 @@ class UnboundCheckSystem(BasicConfig, BasicSystem):
         """停止定时检查任务"""
         self._schedule_task_running = False
         self.logger.info("正在停止未绑定检查定时任务...")
+
+    def reload_config(self) -> List[str]:
+        """配置热重载：处理「从禁用变为启用」的首次检查时机。
+
+        定时任务循环始终在跑，禁用期间每轮都会把 ``last_check_time`` 推到
+        当前时间（避免忙等）。因此用户在配置里打开本系统后，若不额外处理，
+        下一次检查仍要等满一个 ``check_interval``（默认 24 小时）才触发——
+        热重载"看起来没生效"。
+
+        ConfigReloadSystem 在「禁用 → 启用」翻转时给本实例打上
+        ``_just_enabled`` 标记（钩子运行时 ``self.enable`` 已是新值，
+        无法自行区分翻转方向）；此处读标记并把 ``last_check_time`` 回拨一个
+        ``check_interval``——定时循环按 ``next = last + interval`` 计算，
+        仅把 last 归零仍会等到"now + interval"，必须回拨一个完整周期才能
+        让 ``wait_time`` 归零、下一轮立即执行首次检查。
+        """
+        if getattr(self, "_just_enabled", False):
+            interval = int(self.config.get_keys(
+                ["system", "unbound_check", "check_interval"], 86400
+            ))
+            self["last_check_time"] = int(time.time()) - interval
+            self.save()
+            # 清标：一次性语义，下轮循环自然按正常节奏走
+            try:
+                delattr(self, "_just_enabled")
+            except AttributeError:
+                pass
+            return ["未绑定检查已启用，将立即执行首次检查"]
+        return []

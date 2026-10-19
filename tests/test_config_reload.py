@@ -502,3 +502,133 @@ def test_connector_reload_failure_is_isolated(tmp_path):
     assert "重载成功" in text
     assert "连接器 QQ 重载失败" in text, text
     print("PASS: 连接器重载异常被隔离并提示 ✅")
+
+
+# ---------------------------------------------------------------- 定时任务的首次检查时机
+def test_just_enabled_flag_set_on_flip(tmp_path):
+    """「禁用 → 启用」翻转要给系统打 _just_enabled 标记。"""
+    system, cfg, cfg_path = make_system(str(tmp_path))
+
+    class FakeCheck:
+        name = "unbound_check"
+        enable = False
+
+        def reload_config(self):
+            if getattr(self, "_just_enabled", False):
+                return ["已触发"]
+            return []
+
+    fc = FakeCheck()
+    system.system_manager.systems.append(fc)
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        f.write(
+            "GUGUBot:\n  command_prefix: '#'\n"
+            "system:\n  echo:\n    enable: true\n"
+            "  unbound_check:\n    enable: true\n"
+        )
+    REPLIES.clear()
+    r = loop.run_until_complete(system.process_broadcast_info(mk_info(True)))
+    assert r is True
+    assert fc.enable is True
+    assert getattr(fc, "_just_enabled", False) is True
+    assert "已触发" in REPLIES[0][0]["data"]["text"]
+    print("PASS: 禁用→启用翻转打上 _just_enabled 标记 ✅")
+
+
+def test_just_enabled_not_set_when_stays_enabled(tmp_path):
+    """一直是启用状态时不应打标记（否则每次重载都强制首次检查）。"""
+    system, cfg, cfg_path = make_system(str(tmp_path))
+
+    class FakeCheck:
+        name = "unbound_check"
+        enable = True
+
+        def reload_config(self):
+            return []
+
+    fc = FakeCheck()
+    system.system_manager.systems.append(fc)
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        f.write(
+            "GUGUBot:\n  command_prefix: '#'\n"
+            "system:\n  echo:\n    enable: true\n"
+            "  unbound_check:\n    enable: true\n"
+        )
+    REPLIES.clear()
+    loop.run_until_complete(system.process_broadcast_info(mk_info(True)))
+    assert not getattr(fc, "_just_enabled", False)
+    print("PASS: 一直启用时不打 _just_enabled 标记 ✅")
+
+
+def test_unbound_check_hook_rewinds_last_check_time(tmp_path):
+    """未绑定检查的钩子必须把 last_check_time 回拨一整个 check_interval。
+
+    定时循环按 next = last + interval 计算——仅把 last 归零仍会等到
+    now + interval（默认一天），必须回拨一个完整周期才能让 wait_time 归零。
+    """
+    import time as _time
+
+    from gugubot.logic.plugins.unbound_check import UnboundCheckSystem
+
+    system, cfg, cfg_path = make_system(str(tmp_path))
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        f.write(
+            "GUGUBot:\n  command_prefix: '#'\n"
+            "system:\n  echo:\n    enable: true\n"
+            "  unbound_check:\n    enable: true\n    check_interval: 3600\n"
+        )
+
+    uc = UnboundCheckSystem.__new__(UnboundCheckSystem)
+    uc.config = cfg
+    uc.logger = FL()
+    uc.enable = True
+    # BasicConfig 需要 path 才能 save()
+    import os as _os
+    from pathlib import Path as _Path
+    uc.path = _Path(str(tmp_path)) / "unbound_check.json"
+    uc.yaml_format = False
+    uc["last_check_time"] = int(_time.time())
+    uc._just_enabled = True
+
+    changed = uc.reload_config()
+    assert changed, changed
+    interval = 3600
+    last = uc.get("last_check_time")
+    # next_check_time 必须已经到点（<= now）
+    assert last + interval <= int(_time.time()) + 1, (last, interval)
+    # 标记被清掉（一次性语义）
+    assert not getattr(uc, "_just_enabled", False)
+    print("PASS: 未绑定检查钩子回拨 last_check_time 使下次立即到点 ✅")
+
+
+def test_inactive_check_hook_rewinds_last_check_time(tmp_path):
+    """不活跃检查的钩子同理。"""
+    import time as _time
+
+    from gugubot.logic.plugins.inactive_check import InactiveCheckSystem
+
+    system, cfg, cfg_path = make_system(str(tmp_path))
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        f.write(
+            "GUGUBot:\n  command_prefix: '#'\n"
+            "system:\n  echo:\n    enable: true\n"
+            "  inactive_check:\n    enable: true\n    check_interval: 7200\n"
+        )
+
+    ic = InactiveCheckSystem.__new__(InactiveCheckSystem)
+    ic.config = cfg
+    ic.logger = FL()
+    ic.enable = True
+    from pathlib import Path as _Path
+    ic.path = _Path(str(tmp_path)) / "inactive_check.json"
+    ic.yaml_format = False
+    ic["last_check_time"] = int(_time.time())
+    ic._just_enabled = True
+
+    changed = ic.reload_config()
+    assert changed, changed
+    interval = 7200
+    last = ic.get("last_check_time")
+    assert last + interval <= int(_time.time()) + 1, (last, interval)
+    assert not getattr(ic, "_just_enabled", False)
+    print("PASS: 不活跃检查钩子回拨 last_check_time ✅")

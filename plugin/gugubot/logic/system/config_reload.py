@@ -155,9 +155,17 @@ class ConfigReloadSystem(BasicSystem):
             if not isinstance(raw, dict) or "enable" not in raw:
                 continue
             new_enable = bool(raw.get("enable"))
-            if getattr(system, "enable", None) != new_enable:
+            old_enable = getattr(system, "enable", None)
+            if old_enable != new_enable:
                 system.enable = new_enable
                 changed.append(f"{system.name}={'开' if new_enable else '关'}")
+                if new_enable and not old_enable:
+                    # 打标：定时任务型系统据此判断"刚被启用"，需要立即首次检查
+                    # （钩子运行时 self.enable 已是新值，无法自行区分翻转方向）
+                    try:
+                        setattr(system, "_just_enabled", True)
+                    except Exception:
+                        pass
 
         if changed:
             notes.append("系统开关已同步: " + "、".join(changed))
