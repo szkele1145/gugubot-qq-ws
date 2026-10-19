@@ -118,6 +118,8 @@ gugubot:
             bind_info: "玩家 {player_name} 的绑定信息:\n{info}"
 
             search_instruction: "请提供要查询的玩家名称或QQ号"
+            search_no_permission: "只有管理员可以查询他人的绑定信息"
+            search_result: "玩家绑定信息:\n{info}"
 
             whitelist_check_pass: "白名单检查: 所有玩家都已绑定~"
             whitelist_check_result: "白名单检查:\n{result}"
@@ -130,8 +132,8 @@ gugubot:
             no_extra_bound: "绑定成员都在群里~"
             extra_bound_removed: "已将多余已绑定成员移除:\n{result}"
 
-            help_msg: "绑定相关指令：\n{command_prefix}{name} {enable} -> 开启绑定系统\n{command_prefix}{name} {disable} -> 关闭绑定系统\n{command_prefix}{name} {bind} <玩家名> [基岩] -> 绑定玩家\n{command_prefix}{name} {bind} [@QQ号] <玩家名> [基岩] -> 为他人绑定\n{command_prefix}{name} {unbind} -> 解绑所有Java版玩家名（默认）\n{command_prefix}{name} {unbind} [玩家名] [基岩] -> 解绑玩家\n{command_prefix}{name} {unbind} 基岩 -> 解绑所有基岩版玩家名\n{command_prefix}{name} {list} -> 显示绑定列表\n\n【管理员专用命令】\n{command_prefix}{name} 白名单检查 -> 检查白名单中未绑定的玩家\n{command_prefix}{name} 移除未绑定白名单 -> 移除白名单中未绑定的玩家\n{command_prefix}{name} 多余绑定检查 -> 检查不在群里的绑定成员\n{command_prefix}{name} 移除多余绑定 -> 移除不在群里的绑定成员\n\n【参数说明】\n- 基岩版：bedrock, 基岩, be, true, 1（默认false）\n- 解绑时指定基岩版参数可只解绑对应版本的玩家名\n- 解绑 基岩 可解绑当前用户的所有基岩版玩家名"
-            user_help_msg: "绑定相关指令：\n{command_prefix}{name} {bind} <玩家名> [基岩] -> 绑定玩家\n{command_prefix}{name} {unbind} -> 解绑所有Java版玩家名（默认）\n{command_prefix}{name} {unbind} [玩家名] [基岩] -> 解绑玩家\n{command_prefix}{name} {unbind} 基岩 -> 解绑所有基岩版玩家名\n{command_prefix}{name} {list} -> 显示绑定列表\n\n参数说明：\n- 基岩版：bedrock, 基岩, be, true, 1（默认false）\n- 解绑时指定基岩版参数可只解绑对应版本的玩家名\n- 解绑 基岩 可解绑当前用户的所有基岩版玩家名"
+            help_msg: "绑定相关指令：\n{command_prefix}{name} {enable} -> 开启绑定系统\n{command_prefix}{name} {disable} -> 关闭绑定系统\n{command_prefix}{name} {bind} <玩家名> [基岩] -> 绑定玩家\n{command_prefix}{name} {bind} [@QQ号] <玩家名> [基岩] -> 为他人绑定\n{command_prefix}{name} {unbind} -> 解绑所有Java版玩家名（默认）\n{command_prefix}{name} {unbind} [玩家名] [基岩] -> 解绑玩家\n{command_prefix}{name} {unbind} 基岩 -> 解绑所有基岩版玩家名\n{command_prefix}{name} {list} -> 显示绑定列表\n{command_prefix}{name} {search} [玩家名/QQ号] -> 查询绑定信息（管理员可查他人）\n\n【管理员专用命令】\n{command_prefix}{name} 白名单检查 -> 检查白名单中未绑定的玩家\n{command_prefix}{name} 移除未绑定白名单 -> 移除白名单中未绑定的玩家\n{command_prefix}{name} 多余绑定检查 -> 检查不在群里的绑定成员\n{command_prefix}{name} 移除多余绑定 -> 移除不在群里的绑定成员\n\n【参数说明】\n- 基岩版：bedrock, 基岩, be, true, 1（默认false）\n- 解绑时指定基岩版参数可只解绑对应版本的玩家名\n- 解绑 基岩 可解绑当前用户的所有基岩版玩家名"
+            user_help_msg: "绑定相关指令：\n{command_prefix}{name} {bind} <玩家名> [基岩] -> 绑定玩家\n{command_prefix}{name} {unbind} -> 解绑所有Java版玩家名（默认）\n{command_prefix}{name} {unbind} [玩家名] [基岩] -> 解绑玩家\n{command_prefix}{name} {unbind} 基岩 -> 解绑所有基岩版玩家名\n{command_prefix}{name} {list} -> 显示绑定列表\n{command_prefix}{name} {search} -> 查询自己的绑定信息\n\n参数说明：\n- 基岩版：bedrock, 基岩, be, true, 1（默认false）\n- 解绑时指定基岩版参数可只解绑对应版本的玩家名\n- 解绑 基岩 可解绑当前用户的所有基岩版玩家名"
 
         bound_notice:
             name: "绑定提醒"

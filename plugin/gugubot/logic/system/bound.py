@@ -376,9 +376,17 @@ class BoundSystem(BasicSystem):
                     qq_connector = self.system_manager.connector_manager.get_connector(
                         "QQ"
                     )
+                    # 官方直连连接器带 id_mapper（虚拟号→openid）；OneBot 链路
+                    # 没有该属性，此处必须 getattr 兜底，否则 OneBot 模式下
+                    # 每次绑定成功后会抛 AttributeError，被外层 except 吞掉并
+                    # 返回 False —— 绑定其实已写盘，用户却看到"绑定失败"。
+                    mapper = getattr(qq_connector, "id_mapper", None)
+                    user_id = (
+                        mapper.to_official_user(target_id) if mapper else target_id
+                    )
                     await qq_connector.bot.set_group_card(
-                        group_id=int(broadcast_info.source_id),
-                        user_id=qq_connector.id_mapper.to_official_user(target_id),
+                        group_id=broadcast_info.source_id,
+                        user_id=user_id,
                         card=player_name,
                     )
 
@@ -651,7 +659,7 @@ class BoundSystem(BasicSystem):
                     continue
                 try:
                     member_list_result = await qq_connector.bot.get_group_member_list(
-                        group_id=int(group_id)
+                        group_id=group_id
                     )
                     if member_list_result and member_list_result.get("status") == "ok":
                         members = member_list_result.get("data", [])
@@ -722,7 +730,7 @@ class BoundSystem(BasicSystem):
                     continue
                 try:
                     await qq_connector.bot.send_group_msg(
-                        group_id=int(admin_group_id),
+                        group_id=admin_group_id,
                         message=[MessageBuilder.text(notification_msg)],
                     )
                 except Exception as e:
@@ -908,6 +916,7 @@ class BoundSystem(BasicSystem):
         bind_cmd = self.get_tr("bind")
         unbind_cmd = self.get_tr("unbind")
         list_cmd = self.get_tr("list")
+        search_cmd = self.get_tr("search")
 
         # 根据用户权限选择不同的帮助信息
         if broadcast_info.is_admin:
@@ -922,6 +931,7 @@ class BoundSystem(BasicSystem):
                 bind=bind_cmd,
                 unbind=unbind_cmd,
                 list=list_cmd,
+                search=search_cmd,
             )
         else:
             help_msg = self.get_tr(
@@ -931,6 +941,7 @@ class BoundSystem(BasicSystem):
                 bind=bind_cmd,
                 unbind=unbind_cmd,
                 list=list_cmd,
+                search=search_cmd,
             )
         await self.reply(broadcast_info, [MessageBuilder.text(help_msg)])
         return True
@@ -943,8 +954,8 @@ class BoundSystem(BasicSystem):
         """处理绑定查询命令。
 
         - 无参数：查询发送者自己的绑定
-        - 带参数（玩家名或 QQ/虚拟号）：管理员可查任意玩家；
-          普通用户带参数时同样只回自己的（防止借查询枚举他人绑定）
+        - 带参数（玩家名或 QQ/虚拟号）：仅管理员可查任意玩家，
+          普通用户带参数会被拒绝（防止借查询枚举他人绑定）
         """
         command = "".join(
             seg.get("data", {}).get("text", "")
@@ -958,13 +969,15 @@ class BoundSystem(BasicSystem):
         for i in [command_prefix, system_name]:
             command = command.replace(i, "", 1).strip()
         # 去掉子命令词，剩下的就是查询目标
-        command = command.replace(search_cmd, "", 1).strip()
+        # （用切片而非 replace：查询目标名里若含"查询"二字不会被误删）
+        if command.startswith(search_cmd):
+            command = command[len(search_cmd):].strip()
 
         # 无参数 → 查自己（与 #list 个人视角一致，但明确报"未绑定"）
         if not command:
-            player = self.player_manager.get_player(
-                broadcast_info.sender_id, platform="QQ"
-            )
+            # 不加 platform 限定：与 _handle_list 保持一致，避免平台名
+            # 大小写/别名差异导致查不到自己的绑定
+            player = self.player_manager.get_player(broadcast_info.sender_id)
             if not player:
                 await self.reply(
                     broadcast_info,
@@ -973,7 +986,13 @@ class BoundSystem(BasicSystem):
                 return True
             await self.reply(
                 broadcast_info,
-                [MessageBuilder.text(self._format_player_info(player))],
+                [
+                    MessageBuilder.text(
+                        self.get_tr(
+                            "search_result", info=self._format_player_info(player)
+                        )
+                    )
+                ],
             )
             return True
 
@@ -981,7 +1000,7 @@ class BoundSystem(BasicSystem):
         if not broadcast_info.is_admin:
             await self.reply(
                 broadcast_info,
-                [MessageBuilder.text(self.get_tr("no_permission", global_key=True))],
+                [MessageBuilder.text(self.get_tr("search_no_permission"))],
             )
             return True
 
@@ -998,7 +1017,11 @@ class BoundSystem(BasicSystem):
             return True
         await self.reply(
             broadcast_info,
-            [MessageBuilder.text(self._format_player_info(player))],
+            [
+                MessageBuilder.text(
+                    self.get_tr("search_result", info=self._format_player_info(player))
+                )
+            ],
         )
         return True
 

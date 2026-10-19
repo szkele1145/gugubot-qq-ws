@@ -243,7 +243,7 @@ class PlayerManager(BasicConfig):
                         admin_group_members = await self.bound_system.system_manager.connector_manager.get_connector(
                             "QQ"
                         ).bot.get_group_member_list(
-                            group_id=int(admin_group_id)
+                            group_id=admin_group_id
                         )
 
                         if (
