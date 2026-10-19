@@ -201,4 +201,52 @@ class ConfigCheckSystem(BasicSystem):
             ws_state = "已连接" if (ws and getattr(ws, "is_connected", lambda: False)()) else "未连接"
             lines.append(f"运行期官方连接器: 存在（WS {ws_state}） ✅")
 
+        # ---- 官方模式专属：ID 形态与依赖成员列表的系统 ----
+        mapper = getattr(official_connector, "id_mapper", None)
+        if mapper is not None:
+            # 1) admin_ids / admin_group_ids / group_ids 应为虚拟号（官方
+            #    openid 非数字且不可发送为普通目标；虚拟号为 12 位数字）
+            def _check_virtual(key_path: list, label: str) -> None:
+                nonlocal ok
+                ids = self.config.get_keys(key_path, []) or []
+                bad = [
+                    i for i in ids
+                    if i and not (
+                        str(i).isdigit()
+                        and len(str(i)) == 12
+                        and str(i)[:6] in ("100000", "200000")
+                    )
+                ]
+                if bad:
+                    ok = False
+                    lines.append(
+                        f"{label}: 含疑似非虚拟号条目 {bad[:3]}"
+                        f"{'...' if len(bad) > 3 else ''} ❌（官方模式请填 #我是谁 "
+                        f"查到的 100000xxx/200000xxx 虚拟号，而非 QQ 号/openid）"
+                    )
+
+            _check_virtual(
+                ["connector", "QQ", "permissions", "admin_ids"], "admin_ids"
+            )
+            _check_virtual(
+                ["connector", "QQ", "permissions", "admin_group_ids"],
+                "admin_group_ids",
+            )
+            _check_virtual(
+                ["connector", "QQ", "permissions", "group_ids"], "group_ids"
+            )
+
+            # 2) 依赖群成员列表的系统在官方模式必失效（官方无成员列表接口）
+            for sys_key, sys_label in (
+                ("unbound_check", "未绑定检查"),
+                ("inactive_check", "不活跃检查"),
+            ):
+                if self.config.get_keys(
+                    ["system", sys_key, "enable"], False
+                ):
+                    lines.append(
+                        f"{sys_label}: 已启用 ⚠️ （官方平台无群成员列表接口，"
+                        f"该系统无法获取成员，将不生效——建议关闭或换 OneBot 模式）"
+                    )
+
         return {"ok": ok, "lines": lines}

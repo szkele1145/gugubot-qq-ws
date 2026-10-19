@@ -129,13 +129,39 @@ assert "官方直连" in text and "存在问题" in text, text
 print("PASS: 官方直连全配置但 admin/group 缺 → 存在问题")
 
 # ---- 3.5) 全配置含 admin/group → 全部通过 ----
-cfg["connector"]["QQ"]["permissions"] = {"admin_ids": ["100000000000"], "group_ids": ["1103662998"]}
+cfg["connector"]["QQ"]["permissions"] = {"admin_ids": ["100000000000"], "group_ids": ["200000000001"]}
 REPLIES.clear()
 r = loop.run_until_complete(system.process_broadcast_info(mk_info(True)))
 assert r is True and REPLIES
 text = REPLIES[0][0]["data"]["text"]
 assert "全部通过" in text, text
 print("PASS: 全配置 → 全部通过 ✅")
+
+# ---- 3.6) 官方模式：group_ids 填了 OneBot 真实群号（非 12 位虚拟号）→ 存在问题 ----
+cfg["connector"]["QQ"]["permissions"] = {
+    "admin_ids": ["100000000000"],
+    "group_ids": ["1103662998"],
+}
+REPLIES.clear()
+r = loop.run_until_complete(system.process_broadcast_info(mk_info(True)))
+assert r is True and REPLIES
+text = REPLIES[0][0]["data"]["text"]
+assert "非虚拟号" in text and "存在问题" in text, text
+print("PASS: 官方模式 group_ids 填真实群号 → 提示改用虚拟号 ❌")
+
+# ---- 3.7) 官方模式：启用依赖成员列表的系统 → ⚠️ 提示将不生效 ----
+cfg["connector"]["QQ"]["permissions"] = {
+    "admin_ids": ["100000000000"],
+    "group_ids": ["200000000001"],
+}
+cfg["system"] = {"unbound_check": {"enable": True}}
+REPLIES.clear()
+r = loop.run_until_complete(system.process_broadcast_info(mk_info(True)))
+assert r is True and REPLIES
+text = REPLIES[0][0]["data"]["text"]
+assert "未绑定检查" in text and "将不生效" in text, text
+print("PASS: 官方模式启用未绑定检查 → 提示不生效 ⚠️")
+cfg["system"] = {}
 
 # ---- 4) 官方直连但连接器未启动 → 存在问题 ----
 system._connector_manager = types.SimpleNamespace(connectors=[])
