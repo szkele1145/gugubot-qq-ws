@@ -230,8 +230,17 @@ class QQOfficialBot:
         return None
 
     async def get_group_member_list(self, group_id, **kwargs) -> Optional[dict]:
-        """官方无成员列表接口 → 空列表（调用方已有 None/空兜底）。"""
-        return {"status": "ok", "retcode": 0, "data": []}
+        """官方无成员列表接口 → 返回「不支持」标记。
+
+        官方平台不提供群成员列表接口，调用方（如 bound 系统的「多余绑定
+        检查/移除」）依赖成员列表判断绑定者是否还在群里。若这里返回空
+        列表，调用方会把**所有**绑定误判为「不在群里」——检查命令恒报
+        全部多余，移除命令则会把全部绑定数据清空（数据丢失级）。
+
+        故此处用 ``data: None`` 明确表达「无法获取」而非「没有成员」，
+        由调用方识别后跳过相关操作。
+        """
+        return {"status": "ok", "retcode": 0, "data": None, "unsupported": True}
 
     async def get_group_info(self, group_id, **kwargs) -> Optional[dict]:
         """官方无群信息接口 → 返回基本结构。"""

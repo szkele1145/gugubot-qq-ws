@@ -623,13 +623,16 @@ class BoundSystem(BasicSystem):
         for name in player_names:
             self.whitelist.remove_player(name)
 
-    async def _get_member_in_all_groups(self) -> set:
+    async def _get_member_in_all_groups(self) -> Optional[set]:
         """获取所有群（包括普通群和管理群）中的成员ID集合
 
         Returns
         -------
-        set
-            所有群成员的QQ ID集合
+        Optional[set]
+            所有群成员的QQ ID集合；**None 表示"无法获取成员列表"**
+            （如 QQ 官方直连模式不提供该接口），调用方必须据此跳过
+            依赖成员列表的操作——把「无法获取」当成「没有成员」会把
+            所有绑定误判为多余，移除命令将清空全部绑定数据。
         """
         member_id_set = set()
 
@@ -661,8 +664,16 @@ class BoundSystem(BasicSystem):
                     member_list_result = await qq_connector.bot.get_group_member_list(
                         group_id=group_id
                     )
-                    if member_list_result and member_list_result.get("status") == "ok":
+                    if not member_list_result:
+                        continue
+                    # 官方直连等平台不支持成员列表 → data 为 None
+                    if member_list_result.get("unsupported"):
+                        return None
+                    if member_list_result.get("status") == "ok":
                         members = member_list_result.get("data", [])
+                        # data 为 None 同样表示无法获取（不是"没有成员"）
+                        if members is None:
+                            return None
                         for member in members:
                             user_id = str(member.get("user_id", ""))
                             if user_id:
@@ -789,6 +800,15 @@ class BoundSystem(BasicSystem):
 
             # 检查该用户是否还在其他群中
             all_member_ids = await self._get_member_in_all_groups()
+
+            # 成员列表不可用（如 QQ 官方直连无该接口）→ 无法判断，
+            # 跳过清理：否则空集会让条件恒成立，把所有绑定都清掉
+            if all_member_ids is None:
+                self.logger.info(
+                    f"[绑定系统] 无法获取群成员列表（平台不支持），"
+                    f"跳过用户 {user_id} 的退群清理"
+                )
+                return True
 
             # 如果用户不在任何群中，执行清理
             if user_id not in all_member_ids and player:
@@ -1139,18 +1159,24 @@ class BoundSystem(BasicSystem):
 
     ############################################################## 多余绑定检查 ##############################################################
 
-    async def _get_extra_bound_member(self) -> List[tuple]:
+    async def _get_extra_bound_member(self) -> Optional[List[tuple]]:
         """获取不在群里的多余绑定成员
 
         Returns
         -------
-        List[tuple]
-            多余绑定成员列表，元组格式: (qq_id, player_names)
+        Optional[List[tuple]]
+            多余绑定成员列表，元组格式: (qq_id, player_names)；
+            **None 表示成员列表不可用**（平台不支持），调用方必须跳过
+            而不是把它当成"没有多余绑定"或"全部都是多余绑定"。
         """
         extra_bound_members = []
 
         # 获取所有群成员ID
         all_member_ids = await self._get_member_in_all_groups()
+
+        # 成员列表不可用（如 QQ 官方直连无该接口）→ 无法判断
+        if all_member_ids is None:
+            return None
 
         # 检查每个绑定的QQ账号是否还在群中
         for player in self.player_manager.get_all_players():
@@ -1172,6 +1198,18 @@ class BoundSystem(BasicSystem):
         """
         result = await self._get_extra_bound_member()
 
+        # 成员列表不可用（平台不支持，如 QQ 官方直连）→ 无法判断，
+        # 绝不能当成"全部多余"或"没有多余"
+        if result is None:
+            await self.reply(
+                broadcast_info,
+                [MessageBuilder.text(
+                    "当前 QQ 平台不支持获取群成员列表，无法执行多余绑定检查。"
+                    "如需清理，请手动在配置文件中核对绑定。"
+                )],
+            )
+            return True
+
         if not result:
             await self.reply(
                 broadcast_info, [MessageBuilder.text("多余绑定检查: 绑定成员都在群里~")]
@@ -1192,6 +1230,20 @@ class BoundSystem(BasicSystem):
         移除所有不在群里的绑定成员
         """
         result = await self._get_extra_bound_member()
+
+        # 成员列表不可用（平台不支持，如 QQ 官方直连）→ 拒绝执行。
+        # 若把它当成空集，命令会判定"全部绑定都是多余"并逐个删除——
+        # 这是数据丢失级的严重后果。
+        if result is None:
+            await self.reply(
+                broadcast_info,
+                [MessageBuilder.text(
+                    "当前 QQ 平台不支持获取群成员列表，无法判定多余绑定，"
+                    "已跳过移除操作（避免误删全部绑定）。"
+                    "如需清理，请手动在配置文件中核对绑定。"
+                )],
+            )
+            return True
 
         if not result:
             await self.reply(broadcast_info, [MessageBuilder.text("绑定成员都在群里~")])

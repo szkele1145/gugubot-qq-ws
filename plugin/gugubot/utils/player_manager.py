@@ -236,6 +236,7 @@ class PlayerManager(BasicConfig):
 
             if source == config.get_keys(["connector", "QQ", "source_name"], "QQ"):
                 admin_group_member_ids = set()
+                member_list_supported = True
                 for admin_group_id in admin_group_ids:
                     if not admin_group_id:
                         continue
@@ -250,10 +251,17 @@ class PlayerManager(BasicConfig):
                             admin_group_members
                             and admin_group_members.get("status") == "ok"
                         ):
+                            # 平台不支持成员列表（QQ 官方直连）→ data 为 None，
+                            # 与"该群没有成员"含义完全不同：此时无法识别管理群
+                            # 成员，保留空集合而不是把 None 当列表迭代
+                            members = admin_group_members.get("data")
+                            if members is None:
+                                member_list_supported = False
+                                continue
                             admin_group_member_ids.update(
                                 [
                                     str(member.get("user_id", ""))
-                                    for member in admin_group_members.get("data", [])
+                                    for member in members
                                 ]
                             )
                     except Exception as e:
@@ -261,6 +269,11 @@ class PlayerManager(BasicConfig):
                             f"获取管理群 {admin_group_id} 成员列表失败: {e}"
                         )
                         continue
+                if not member_list_supported:
+                    self.logger.warning(
+                        "[绑定系统] 当前 QQ 平台不支持获取群成员列表，"
+                        "管理群成员将无法被识别为管理员"
+                    )
                 admin_group_ids = list(admin_group_member_ids)
 
             platform_accounts = player.accounts.get(source, [])

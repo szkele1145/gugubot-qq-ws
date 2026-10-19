@@ -296,7 +296,15 @@ class UnboundCheckSystem(BasicConfig, BasicSystem):
                         )
                     )
                     if member_list_result and member_list_result.get("status") == "ok":
-                        members = member_list_result.get("data", [])
+                        members = member_list_result.get("data")
+                        # 平台不支持成员列表（QQ 官方直连）→ data 为 None，
+                        # 不能当空列表迭代（会抛 TypeError）
+                        if members is None:
+                            self.logger.warning(
+                                f"当前 QQ 平台不支持获取群成员列表"
+                                f"（管理群 {admin_group_id}），本系统无法工作"
+                            )
+                            continue
                         for member in members:
                             user_id = str(member.get("user_id", ""))
                             if user_id:
@@ -329,7 +337,15 @@ class UnboundCheckSystem(BasicConfig, BasicSystem):
                         self.logger.warning(f"获取群 {group_id} 成员列表失败")
                         continue
 
-                    members = member_list_result.get("data", [])
+                    members = member_list_result.get("data")
+                    # 平台不支持成员列表（QQ 官方直连）→ data 为 None，
+                    # 不能当空列表迭代（会抛 TypeError）
+                    if members is None:
+                        self.logger.warning(
+                            f"当前 QQ 平台不支持获取群成员列表"
+                            f"（群 {group_id}），未绑定检查无法工作"
+                        )
+                        continue
                     unbound_users = []
 
                     # 检查每个成员
