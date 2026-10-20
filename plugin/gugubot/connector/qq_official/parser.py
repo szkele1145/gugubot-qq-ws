@@ -83,14 +83,28 @@ def _has_ids(ids: Optional[Iterable]) -> bool:
 class QQOfficialParser(BasicParser):
     """QQ 官方平台事件解析器。"""
 
-    def _is_admin(self, sender_id) -> bool:
-        """检查是否是管理员（sender_id 已是虚拟号）。"""
+    def _is_admin(self, sender_id, source_id=None) -> bool:
+        """检查是否是管理员（sender_id 已是虚拟号）。
+
+        Parameters
+        ----------
+        sender_id : str
+            发送者虚拟号
+        source_id : Optional[str]
+            当前所在群的虚拟号/真实群号。
+            **必须显式传入**：官方平台下「管理群内所有人都是管理员」，
+            若依赖实例上的粘性字段 ``_current_source_id``，C2C 单聊
+            （无群上下文）就会沿用**上一条群消息**留下的值——上一条来自
+            管理群时，随后的单聊消息会被误判为管理员消息。
+            传 None 表示「无群上下文」，只看 admin_ids 列表。
+        """
         config = self.connector.config
         admin_ids = config.get_keys(["connector", "QQ", "permissions", "admin_ids"], [])
         if _id_in(sender_id, admin_ids):
             return True
-        # 官方平台没有"管理员"概念，管理群内所有人可用
-        source_id = getattr(self, "_current_source_id", None)
+        # 官方平台没有"管理员"概念，管理群内所有人可用。
+        # source_id 必须显式传入：None 表示「无群上下文」（C2C 单聊），
+        # 此时只看 admin_ids 列表。
         if source_id:
             admin_groups = config.get_keys(
                 ["connector", "QQ", "permissions", "admin_group_ids"], []
@@ -264,8 +278,8 @@ class QQOfficialParser(BasicParser):
                 )
             return None
 
-        # 供 _is_admin 识别「当前群」（管理群判定依赖它）
-        self._current_source_id = legacy_group
+        # 注：群上下文一律通过 _is_admin(..., source_id=...) 显式传递，
+        # 不再往实例上存粘性字段——那是 C2C 单聊越权误判的根源。
 
         content = data.get("content", "") or ""
 
@@ -309,7 +323,7 @@ class QQOfficialParser(BasicParser):
             sender=sender_name,
             sender_id=legacy_user,
             is_admin=role_is_admin
-            or self._is_admin(legacy_user)
+            or self._is_admin(legacy_user, source_id=legacy_group)
             or self._is_admin_group(legacy_group),
         )
 
@@ -359,8 +373,10 @@ class QQOfficialParser(BasicParser):
             )
         )
 
-        # 官方单聊默认不放开权限（无 friend_is_admin 概念），保持与管理员列表匹配
-        is_admin = self._is_admin(legacy_user)
+        # 官方单聊默认不放开权限（无 friend_is_admin 概念），保持与管理员列表匹配。
+        # source_id 显式传 None：单聊没有群上下文，绝不能沿用
+        # _current_source_id 的粘性残留（上一条管理群消息留下的值）。
+        is_admin = self._is_admin(legacy_user, source_id=None)
 
         # 空消息保底
         if not segments:
