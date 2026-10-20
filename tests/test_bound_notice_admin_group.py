@@ -8,7 +8,8 @@
 
 与 tests/test_echo_admin_group.py 是同一类缺陷的第二个实例。
 """
-import sys, types, asyncio, importlib.abc, importlib.machinery
+import sys
+import pathlib, types, asyncio, importlib.abc, importlib.machinery
 
 
 class _A:
@@ -36,7 +37,7 @@ class _F:
 
 
 sys.meta_path.insert(0, _F())
-sys.path.insert(0, r'F:\vibe coding工程\gugubot-qq-ws\plugin')
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / 'plugin'))
 
 from gugubot.logic.system.bound_notice import BoundNoticeSystem
 from gugubot.utils.types import BroadcastInfo, Source

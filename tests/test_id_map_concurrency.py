@@ -11,7 +11,8 @@ TOCTOU 窗口；但由于 RLock 紧邻释放、GIL 又让窗口极窄，把它�
 后这些测试**依然通过**——即无法稳定复现。修复（整段持锁 + RLock 重入）
 是消除窗口的防御性改动，不是靠测试驱动出来的修复。
 """
-import sys, types, importlib.abc, importlib.machinery, threading, tempfile
+import sys
+import pathlib, types, importlib.abc, importlib.machinery, threading, tempfile
 from pathlib import Path
 
 
@@ -40,7 +41,7 @@ class _F:
 
 
 sys.meta_path.insert(0, _F())
-sys.path.insert(0, r'F:\vibe coding工程\gugubot-qq-ws\plugin')
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / 'plugin'))
 
 from gugubot.connector.qq_official.id_map import QQIDMapper
 

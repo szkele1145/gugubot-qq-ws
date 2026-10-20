@@ -7,7 +7,8 @@
    直接挂死 MCDR 事件循环（不是抛异常，无 traceback 可查）。
 2. ``max_length`` 为非数字字符串时 ``int()`` 抛 ValueError。
 """
-import sys, types, importlib.abc, importlib.machinery
+import sys
+import pathlib, types, importlib.abc, importlib.machinery
 
 
 class _A:
@@ -35,7 +36,7 @@ class _F:
 
 
 sys.meta_path.insert(0, _F())
-sys.path.insert(0, r'F:\vibe coding工程\gugubot-qq-ws\plugin')
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / 'plugin'))
 
 from gugubot.connector.qq_official.connector import QQOfficialConnector
 from gugubot.connector.qq_connector import QQWebSocketConnector

@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
-import sys, types
+import sys
+import pathlib, types
 
 class _Any:
     def __init__(self, *a, **k): pass
@@ -29,7 +30,7 @@ class _StubFinder:
         return None
 
 sys.meta_path.insert(0, _StubFinder())
-sys.path.insert(0, r'F:\vibe coding工程\gugubot-qq-ws\plugin')
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / 'plugin'))
 
 # ===== 测试 segments_to_plain_text =====
 from gugubot.utils.message import segments_to_plain_text, extract_images, strip_minecraft_color_codes

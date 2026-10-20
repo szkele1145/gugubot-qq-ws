@@ -7,7 +7,8 @@
 3. BroadcastInfo 结构正确（群号绑定/虚拟号/管理员判定）
 4. native_chat 注入命令生成（CICode 图片 + 转义 + 前缀）
 """
-import sys, types, json, threading, time, socket, base64, hashlib, struct
+import sys
+import pathlib, types, json, threading, time, socket, base64, hashlib, struct
 import os, tempfile, pathlib
 
 # ===== stub mcdreforged =====
@@ -39,7 +40,7 @@ class _StubFinder:
         return None
 
 sys.meta_path.insert(0, _StubFinder())
-sys.path.insert(0, r'F:\vibe coding工程\gugubot-qq-ws\plugin')
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / 'plugin'))
 
 # ===== 本地 HTTP 附件服务器 =====
 PNG = base64.b64decode(

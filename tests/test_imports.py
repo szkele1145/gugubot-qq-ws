@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """全插件导入回归：验证 OneBot + 官方双路径全部模块可导入。"""
-import sys, types
+import sys
+import pathlib, types
 
 class _Any:
     def __init__(self, *a, **k): pass
@@ -19,7 +20,7 @@ class _StubFinder:
         if f.startswith("mcdreforged") or f.startswith("packaging"):
             return importlib.machinery.ModuleSpec(f, _Loader(), is_package=True)
 sys.meta_path.insert(0, _StubFinder())
-sys.path.insert(0, r'F:\vibe coding工程\gugubot-qq-ws\plugin')
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / 'plugin'))
 
 import importlib
 mods = [

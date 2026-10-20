@@ -8,7 +8,8 @@
 
 修复：改为「非空即可路由」，把判定收进 _is_routable_source_id()。
 """
-import sys, types, asyncio, importlib.abc, importlib.machinery
+import sys
+import pathlib, types, asyncio, importlib.abc, importlib.machinery
 
 
 class _A:
@@ -36,7 +37,7 @@ class _F:
 
 
 sys.meta_path.insert(0, _F())
-sys.path.insert(0, r'F:\vibe coding工程\gugubot-qq-ws\plugin')
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / 'plugin'))
 
 from gugubot.logic.system.basic_system import BasicSystem
 from gugubot.utils.types import BroadcastInfo, Source

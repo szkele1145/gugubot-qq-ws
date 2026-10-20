@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """ConfigCheckSystem 单测：#配置检验 / #config check 语法+语义校验。"""
-import sys, types, asyncio
+import sys
+import pathlib, types, asyncio
 
 class _Any:
     def __init__(self, *a, **k): pass
@@ -19,7 +20,7 @@ class _StubFinder:
         if f.startswith("mcdreforged") or f.startswith("packaging"):
             return importlib.machinery.ModuleSpec(f, _Loader(), is_package=True)
 sys.meta_path.insert(0, _StubFinder())
-sys.path.insert(0, r'F:\vibe coding工程\gugubot-qq-ws\plugin')
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / 'plugin'))
 
 from gugubot.logic.system.config_check import ConfigCheckSystem
 from gugubot.utils.types import BroadcastInfo, Source

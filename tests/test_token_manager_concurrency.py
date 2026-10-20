@@ -14,7 +14,8 @@
 
 3. **并发重复刷新**：单飞语义下 N 个并发 get_token 只应触发 1 次网络请求。
 """
-import sys, types, threading, time, importlib.abc, importlib.machinery
+import sys
+import pathlib, types, threading, time, importlib.abc, importlib.machinery
 
 
 class _A:
@@ -42,7 +43,7 @@ class _F:
 
 
 sys.meta_path.insert(0, _F())
-sys.path.insert(0, r'F:\vibe coding工程\gugubot-qq-ws\plugin')
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / 'plugin'))
 
 from gugubot.connector.qq_official.token_manager import QQTokenManager
 

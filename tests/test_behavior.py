@@ -1,4 +1,5 @@
-import sys, types, json, threading, time
+import sys
+import pathlib, types, json, threading, time
 
 # ===== stub mcdreforged =====
 class _Any:
@@ -29,7 +30,7 @@ class _StubFinder:
         return None
 
 sys.meta_path.insert(0, _StubFinder())
-sys.path.insert(0, r'F:\vibe coding工程\gugubot-qq-ws\plugin')
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / 'plugin'))
 
 # ===== 测试 1: id_map 绑定流程 =====
 import tempfile, pathlib

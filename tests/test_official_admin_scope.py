@@ -16,7 +16,8 @@ C2C 路径传 None 表示「无群上下文」；粘性字段整体移除。
 
 本测试直接针对 _is_admin 的调用契约，不依赖网络与 WS。
 """
-import sys, types, importlib.abc, importlib.machinery
+import sys
+import pathlib, types, importlib.abc, importlib.machinery
 
 
 class _A:
@@ -44,7 +45,7 @@ class _F:
 
 
 sys.meta_path.insert(0, _F())
-sys.path.insert(0, r'F:\vibe coding工程\gugubot-qq-ws\plugin')
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / 'plugin'))
 
 from gugubot.connector.qq_official.parser import QQOfficialParser
 

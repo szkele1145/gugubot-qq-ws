@@ -16,7 +16,8 @@
 
 修复：判重必须用 ``_legacy_group_openid.keys()``（已占用的真实群号）。
 """
-import sys, types, importlib.abc, importlib.machinery, json, tempfile
+import sys
+import pathlib, types, importlib.abc, importlib.machinery, json, tempfile
 from pathlib import Path
 
 
@@ -45,7 +46,7 @@ class _F:
 
 
 sys.meta_path.insert(0, _F())
-sys.path.insert(0, r'F:\vibe coding工程\gugubot-qq-ws\plugin')
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / 'plugin'))
 
 from gugubot.connector.qq_official.id_map import QQIDMapper
 

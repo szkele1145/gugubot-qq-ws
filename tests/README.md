@@ -7,10 +7,10 @@ GUGUBot 官方直连改造版的自动化测试（全部独立可跑，无需真
 ```powershell
 $env:PYTHONIOENCODING = "utf-8"
 
-# 一次性跑全部 pytest 用例（当前 108 项，约 15s）
+# 一次性跑全部 pytest 用例（当前 137 项，约 30s；含 11 个独立脚本的自动执行）
 python -m pytest tests/ -q
 
-# 独立脚本（不由 pytest 收集，需单独执行）
+# 独立脚本（不由 pytest 收集，需单独执行；现已被 test_standalone_scripts.py 自动纳入回归网）
 python tests\test_imports.py       # 全插件导入回归（OneBot+官方双路径）
 python tests\test_config_check.py  # 配置校验器独立校验
 python tests\test_lang_consistency.py  # 语言包键一致性（zh_cn ↔ en_us ↔ 代码引用）
@@ -44,8 +44,9 @@ python tests\test_lang_orphans.py       # 语言包孤儿键 / 单边漏译反�
 | test_general_help_placeholders.py | `#帮助` 的模板占位符：管理员与非管理员两分支传入的占位符集合完全一致（非管理员分支曾缺 11 个）、含 `official_status`/`whoami`、含全部系统名占位符 |
 | test_official_admin_scope.py | 官方直连管理群上下文**不得泄漏到 C2C 单聊**（越权误判）：单聊显式 `source_id=None`、`admin_ids` 列表用户单聊仍是管理员、管理群内用户群消息仍是管理员、非管理群用户不是管理员、不再使用粘性群上下文字段 |
 | test_token_manager_concurrency.py | `QQTokenManager` 并发：401 触发的 `invalidate()` 只作废「本次实际使用的那枚」token（不误伤别处刚刷新的）、8 并发只触发 1 次刷新（单飞）、刷新进行中 `invalidate()` 不被阻塞（不持锁做 I/O） |
+| test_standalone_scripts.py | **把独立脚本纳入 pytest 回归网**（v2.2.10 新增）：用 `subprocess` 逐个执行 11 个独立脚本，断言退出码为 0 且打印各自的成功标志；并检查「仓库里新增的 `test_*.py` 若既没有模块级 `def test_*`、也没登记到 `STANDALONE_SCRIPTS`」→ 直接失败（防止再出现「写了个测试文件但永远不会被执行」） |
 
-### 独立脚本（不由 pytest 收集）
+### 独立脚本（不由 pytest 收集，但已被 `test_standalone_scripts.py` 自动执行）
 
 | 测试 | 覆盖内容 |
 |---|---|
@@ -54,4 +55,8 @@ python tests\test_lang_orphans.py       # 语言包孤儿键 / 单边漏译反�
 | test_bound_subcommand_i18n.py | 绑定系统管理员子命令的 i18n：命令字必须来自语言包（`get_tr`）而非硬编码；zh_cn / en_us 的值与旧硬编码**逐一比对一致**（行为不变）；源码不再出现中英双语命令字列表 |
 | test_lang_consistency.py | 语言包键一致性：静态扫描源码里所有 `get_tr("...")` 与 `BasicSystem.__init__` 注册名，逐一确认 zh_cn / en_us 都有对应条目，并比对两个语言文件的 system 段键集合完全一致。key 收集覆盖**动态形式**（变量赋值式 / 三元式 / 元组式 / 嵌套调用）。**防回归重点**——MCDR 的 `server.tr()` 找不到 key 时返回 key 字符串本身（不报错），键名错位会让命令前缀变成一串 key 路径 → 命令**静默失效**且无任何日志 |
 | test_lang_orphans.py | 语言包孤儿键反向检查：找出「两边都有但代码从不引用」的死键，并互查两个语言包的单边漏译（zh 有 en 无 / en 有 zh 无） |
-| diagnose_config.py | 配置问题诊断辅助脚本（人工排查用） |
+| diagnose_config.py | 配置问题诊断辅助脚本（人工排查用，需传配置路径） |
+
+> ⚠️ **两类测试文件必须分清**：有模块级 `def test_*` 的被 pytest 直接收集；写成「顶层脚本 + `print("PASS")`」的**永远不会被 `pytest tests/` 执行**——历史上 `test_rate_limit.py` 就是这样长期「假通过」的（详见上表）。现在所有独立脚本已登记进 `test_standalone_scripts.py`，新增时请同步登记。
+
+> **路径约定**：`tests/` 下的脚本用 `sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / 'plugin'))` 引入插件源码（基于 `__file__` 推导）。此前 25 个文件硬编码了 `F:\vibe coding工程\gugubot-qq-ws\plugin`，换机器/换目录会全部 ImportError，已全部改掉。

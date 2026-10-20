@@ -14,7 +14,8 @@
    前者按 openid 维度统计，后者按 legacy 号维度统计；两者都应覆盖
    直填 openid 的群。
 """
-import sys, types, asyncio, importlib.abc, importlib.machinery
+import sys
+import pathlib, types, asyncio, importlib.abc, importlib.machinery
 
 
 class _A:
@@ -42,7 +43,7 @@ class _F:
 
 
 sys.meta_path.insert(0, _F())
-sys.path.insert(0, r'F:\vibe coding工程\gugubot-qq-ws\plugin')
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / 'plugin'))
 
 from gugubot.connector.qq_official.id_map import QQIDMapper
 from gugubot.logic.system.official_status import OfficialStatusSystem

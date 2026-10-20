@@ -6,7 +6,8 @@
 2. 装上改造版插件后 add_new_config() 做合并迁移
 3. 验证：用户值原样保留 + 新键（connection.type / official / native_chat）补全
 """
-import sys, types, io, os, tempfile, pathlib
+import sys
+import pathlib, types, io, os, tempfile, pathlib
 
 class _Any:
     def __init__(self, *a, **k): pass
@@ -25,13 +26,13 @@ class _StubFinder:
         if f.startswith("mcdreforged") or f.startswith("packaging"):
             return importlib.machinery.ModuleSpec(f, _Loader(), is_package=True)
 sys.meta_path.insert(0, _StubFinder())
-sys.path.insert(0, r'F:\vibe coding工程\gugubot-qq-ws\plugin')
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / 'plugin'))
 
 from ruamel.yaml import YAML
 yaml = YAML()
 yaml.preserve_quotes = True
 
-PLUGIN_DIR = pathlib.Path(r'F:\vibe coding工程\gugubot-qq-ws\plugin')
+PLUGIN_DIR = pathlib.Path(__file__).resolve().parent.parent / 'plugin'
 
 # ===== 模拟 v2.2.4 老配置（用户自定义值：真实群号、管理员、自定义群名） =====
 OLD_CONFIG = """\

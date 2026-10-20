@@ -12,7 +12,8 @@ execute_mcdr / unbound_check / inactive_check。
 
 本测试直接比对两个分支实际传入的 kwargs 键集合。
 """
-import sys, types, asyncio, importlib.abc, importlib.machinery
+import sys
+import pathlib, types, asyncio, importlib.abc, importlib.machinery
 
 
 class _A:
@@ -40,7 +41,7 @@ class _F:
 
 
 sys.meta_path.insert(0, _F())
-sys.path.insert(0, r'F:\vibe coding工程\gugubot-qq-ws\plugin')
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / 'plugin'))
 
 from gugubot.logic.system.general_help import GeneralHelpSystem
 from gugubot.utils.types import BroadcastInfo, Source

@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """OfficialStatusSystem 单测：官方模式响应 #状态，OneBot 模式跳过。"""
-import sys, types, asyncio
+import sys
+import pathlib, types, asyncio
 
 class _Any:
     def __init__(self, *a, **k): pass
@@ -19,7 +20,7 @@ class _StubFinder:
         if f.startswith("mcdreforged") or f.startswith("packaging"):
             return importlib.machinery.ModuleSpec(f, _Loader(), is_package=True)
 sys.meta_path.insert(0, _StubFinder())
-sys.path.insert(0, r'F:\vibe coding工程\gugubot-qq-ws\plugin')
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / 'plugin'))
 
 from gugubot.logic.system.official_status import OfficialStatusSystem
 from gugubot.utils.types import BroadcastInfo, Source

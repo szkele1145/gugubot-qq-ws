@@ -25,13 +25,14 @@
 - 源码里不再有硬编码的中英双语命令字列表
 """
 import io
+import pathlib
 import os
 import re
 import sys
 
 from ruamel.yaml import YAML
 
-REPO = r"F:\vibe coding工程\gugubot-qq-ws"
+REPO = str(pathlib.Path(__file__).resolve().parent.parent)
 sys.path.insert(0, os.path.join(REPO, "plugin"))
 
 BOUND_PY = os.path.join(REPO, "plugin", "gugubot", "logic", "system", "bound.py")

@@ -8,7 +8,8 @@
 4. 配置文件前缀本身可被重载改写，后续命令要用新前缀；
 5. 非管理员不得触发重载。
 """
-import sys, types, asyncio, tempfile, os, importlib.abc, importlib.machinery
+import sys
+import pathlib, types, asyncio, tempfile, os, importlib.abc, importlib.machinery
 
 
 class _A:
@@ -36,7 +37,7 @@ class _F:
 
 
 sys.meta_path.insert(0, _F())
-sys.path.insert(0, r'F:\vibe coding工程\gugubot-qq-ws\plugin')
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / 'plugin'))
 
 from gugubot.config.bot_config import BotConfig
 from gugubot.logic.system.config_reload import ConfigReloadSystem

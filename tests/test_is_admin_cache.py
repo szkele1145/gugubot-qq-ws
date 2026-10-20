@@ -10,7 +10,8 @@ N 条消息 × M 个管理群 = 请求放大。成员列表短时间内不会变
 - 仅在平台支持成员列表时缓存（官方直连恒不可得，缓存无意义）
 - 失败结果（空集）同样缓存——避免 WS 断连期间每条消息打一遍 error 刷屏
 """
-import sys, types, asyncio, importlib.abc, importlib.machinery
+import sys
+import pathlib, types, asyncio, importlib.abc, importlib.machinery
 
 
 class _A:
@@ -38,7 +39,7 @@ class _F:
 
 
 sys.meta_path.insert(0, _F())
-sys.path.insert(0, r'F:\vibe coding工程\gugubot-qq-ws\plugin')
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / 'plugin'))
 
 from gugubot.utils.player_manager import PlayerManager
 

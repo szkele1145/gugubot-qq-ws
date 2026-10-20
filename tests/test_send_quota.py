@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
-import sys, types, asyncio
+import sys
+import pathlib, types, asyncio
 
 class _A:
     def __init__(self, *a, **k): pass
@@ -18,7 +19,7 @@ class _F:
         if f.startswith('mcdreforged') or f.startswith('packaging'):
             return importlib.machinery.ModuleSpec(f, _L(), is_package=True)
 sys.meta_path.insert(0, _F())
-sys.path.insert(0, r'F:\vibe coding工程\gugubot-qq-ws\plugin')
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / 'plugin'))
 from gugubot.connector.qq_official.connector import QQOfficialConnector
 from gugubot.connector.qq_official.api_client import QQOfficialAPIError
 

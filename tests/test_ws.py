@@ -1,4 +1,5 @@
-import sys, types, json, threading, time, socket, base64, hashlib, struct
+import sys
+import pathlib, types, json, threading, time, socket, base64, hashlib, struct
 
 # ===== stub mcdreforged =====
 class _Any:
@@ -29,7 +30,7 @@ class _StubFinder:
         return None
 
 sys.meta_path.insert(0, _StubFinder())
-sys.path.insert(0, r'F:\vibe coding工程\gugubot-qq-ws\plugin')
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / 'plugin'))
 
 # ===== 最小 WS 服务器（标准库实现）=====
 GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
@@ -122,15 +123,21 @@ def handle_client(conn):
 def serve():
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    srv.bind(("127.0.0.1", 19877))
+    # 端口 0 = 由内核分配空闲端口 → 避免固定端口被占用/残留导致 bind 失败
+    srv.bind(("127.0.0.1", 0))
     srv.listen(1)
+    global PORT
+    PORT = srv.getsockname()[1]
+    PORT_READY.set()
     while True:
         c, _ = srv.accept()
         threading.Thread(target=handle_client, args=(c,), daemon=True).start()
 
+PORT = 0
+PORT_READY = threading.Event()
 server_thread = threading.Thread(target=serve, daemon=True)
 server_thread.start()
-time.sleep(0.3)
+assert PORT_READY.wait(timeout=10), "WS 服务器启动超时（bind 失败？）"
 
 # ===== 客户端 =====
 from gugubot.connector.qq_official.token_manager import QQTokenManager
@@ -149,7 +156,7 @@ tm._expires_at = time.time() + 3600
 
 pool = QQReplyPool()
 api = QQOfficialClient(tm, pool, logger=FakeLogger())
-api.get_wss_url = lambda: {"url": "ws://127.0.0.1:19877"}
+api.get_wss_url = lambda: {"url": f"ws://127.0.0.1:{PORT}"}
 
 dispatches = []
 from gugubot.connector.qq_official.ws_client import QQOfficialWSClient
@@ -170,9 +177,15 @@ for i in range(50):
 assert ws.is_connected(), "READY 后应视为已连接"
 assert ws.session_id == "SESS123"
 
-time.sleep(2.5)
-heartbeats = [r for r in RECEIVED if r.get("op") == 1]
-assert len(heartbeats) >= 1, f"应有心跳: {RECEIVED}"
+# 心跳间隔由 ws_client 决定；用条件等待替代固定 sleep（慢机器上 2.5s 不够，
+# 快机器上又白等）：轮询直到收到心跳或超时
+deadline = time.time() + 15
+while time.time() < deadline:
+    heartbeats = [r for r in RECEIVED if r.get("op") == 1]
+    if heartbeats:
+        break
+    time.sleep(0.1)
+assert heartbeats, f"应有心跳: {RECEIVED}"
 
 ws.disconnect()
 print()

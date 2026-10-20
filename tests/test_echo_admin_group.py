@@ -8,7 +8,8 @@
 修复：id_mapper 缺失时（OneBot），source_id 本身就是真实群号，
 直接按字符串比对。
 """
-import sys, types, asyncio, importlib.abc, importlib.machinery
+import sys
+import pathlib, types, asyncio, importlib.abc, importlib.machinery
 
 
 class _A:
@@ -36,7 +37,7 @@ class _F:
 
 
 sys.meta_path.insert(0, _F())
-sys.path.insert(0, r'F:\vibe coding工程\gugubot-qq-ws\plugin')
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / 'plugin'))
 
 from gugubot.logic.system.echo import EchoSystem
 from gugubot.utils.types import BroadcastInfo, Source
