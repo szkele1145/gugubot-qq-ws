@@ -217,7 +217,14 @@ class BoundSystem(BasicSystem):
 
         command = command.replace(system_name, "", 1).strip()
 
-        if command.strip() == "" and len(broadcast_info.message) == 1:
+        # 空命令 → 显示绑定系统帮助。
+        # 判定只看「拼接后的命令文本是否为空」，**不能**用
+        # ``len(broadcast_info.message) == 1``：QQ 官方直连里 @机器人 时
+        # 消息段是 [at 段, text 段]（长度 2），该条件在官方模式下恒为
+        # False → 空命令会绕过这里、掉进 _handle_bind，最后回的是
+        # bind_instruction（用法提示）——与 OneBot 单段模式回 user_help_msg
+        # （系统帮助）**不一致**。这里统一：两种平台都回系统帮助。
+        if command.strip() == "":
             return await self._handle_help(broadcast_info)
         elif command.startswith(self.get_tr("unbind")):
             return await self._handle_unbind(broadcast_info)
@@ -255,7 +262,10 @@ class BoundSystem(BasicSystem):
         for i in [command_prefix, system_name]:
             command = command.replace(i, "", 1).strip()
 
-        if not command and len(broadcast_info.message) == 1:
+        # 空内容 → 回绑定用法提示（直接调用本方法时的兜底；正常命令流
+        # 里空命令已在 _handle_command 被拦下并回系统帮助）。
+        # 判定同样不看消息段数（官方 @机器人 时消息段为 2）。
+        if not command:
             await self.reply(
                 broadcast_info,
                 [

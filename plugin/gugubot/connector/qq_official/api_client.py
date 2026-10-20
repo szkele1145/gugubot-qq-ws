@@ -13,7 +13,6 @@
 
 from __future__ import annotations
 
-import threading
 import time
 from typing import Any, Dict, Optional
 
@@ -71,7 +70,6 @@ class QQOfficialClient:
         self._token = token_manager
         self._pool = reply_pool
         self._logger = logger
-        self._seq_lock = threading.Lock()
         self._timeout = timeout if timeout is not None else self.DEFAULT_TIMEOUT
         # 复用 HTTP 会话（连接池），避免每次请求重新建立 TCP 握手与 TLS
         self._session = requests.Session()
@@ -158,7 +156,12 @@ class QQOfficialClient:
         )
         if is_auth_err and retry_on_auth:
             self._token.invalidate(used_token)
-            return self._request(method, path, payload, params, retry_on_auth=False)
+            # 透传 _net_attempt：网络异常重试后若又遇到鉴权失败，重试次数
+            # 不应被重置（否则最坏情况请求次数翻倍）
+            return self._request(
+                method, path, payload, params,
+                retry_on_auth=False, _net_attempt=_net_attempt,
+            )
 
         # 429 流量限制：不刷新 token、不重试，事件级直接抛出，
         # 避免把限流误判为 token 失效导致无效刷新。

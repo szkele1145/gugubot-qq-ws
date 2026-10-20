@@ -728,7 +728,13 @@ class QQOfficialConnector(BasicConnector):
         event_id = None
         if taken is None:
             event_id = self.reply_pool.take_event(group_openid)
-        for attempt in range(3):
+        attempt = 0
+        # 「被动引用失效换额度」的次数上限。独立于 attempt 计数：
+        # 换到的是全新额度，必须给一次被真正使用的机会（不能因轮次
+        # 已用尽而白白浪费）；但池里若全是失效额度也不能无限换下去。
+        swaps = 0
+        _MAX_SWAPS = 3
+        while attempt < 3:
             try:
                 if taken:
                     mid, seq = taken
@@ -754,7 +760,7 @@ class QQOfficialConnector(BasicConnector):
                 # 被动额度被官方拒绝（msg_id/event_id 过期、msg_seq 非法或
                 # 已用尽）：该条目已成废条目，丢弃并换下一条，否则每次发送
                 # 都撞同一个失效 id，白白退避重试 3 次。
-                if self._is_stale_reply_ref(e):
+                if self._is_stale_reply_ref(e) and swaps < _MAX_SWAPS:
                     if taken:
                         self.reply_pool.drop(group_openid, taken[0])
                     elif event_id:
@@ -763,14 +769,18 @@ class QQOfficialConnector(BasicConnector):
                     event_id = None
                     if taken is None:
                         event_id = self.reply_pool.take_event(group_openid)
+                    swaps += 1
                     # 换到了全新额度：立即重试，退避对失效 id 毫无意义。
                     # 没换到（池已空）说明本就是纯主动消息，无需空转重试。
+                    # **不消耗 attempt**：新额度必须有一次被真正使用的机会。
                     if taken or event_id:
                         continue
                 if self._is_rate_limited(e) and attempt < 2:
+                    attempt += 1
                     await asyncio.sleep(1 + attempt)
                     continue
-                await asyncio.sleep(0.5 * (attempt + 1))
+                attempt += 1
+                await asyncio.sleep(0.5 * attempt)
         raise last_err or RuntimeError("未知发送错误")
 
     def _request_group_with_event(self, group_openid: str, content: str, event_id: str) -> dict:
@@ -796,7 +806,11 @@ class QQOfficialConnector(BasicConnector):
         event_id = None
         if taken is None:
             event_id = self.reply_pool.take_event(pool_key)
-        for attempt in range(3):
+        attempt = 0
+        # 「被动引用失效换额度」次数上限（独立于 attempt，见 _send_group 注释）
+        swaps = 0
+        _MAX_SWAPS = 3
+        while attempt < 3:
             try:
                 if taken:
                     mid, seq = taken
@@ -820,7 +834,7 @@ class QQOfficialConnector(BasicConnector):
                 if e.status in (401, 403):
                     raise
                 # 被动引用失效：丢弃并换下一条，避免每次撞同一个废 id
-                if self._is_stale_reply_ref(e):
+                if self._is_stale_reply_ref(e) and swaps < _MAX_SWAPS:
                     if taken:
                         self.reply_pool.drop(pool_key, taken[0])
                     elif event_id:
@@ -829,13 +843,17 @@ class QQOfficialConnector(BasicConnector):
                     event_id = None
                     if taken is None:
                         event_id = self.reply_pool.take_event(pool_key)
-                    # 换到新额度才立即重试；池已空则是纯主动模式，不空转
+                    swaps += 1
+                    # 换到新额度才立即重试；池已空则是纯主动模式，不空转。
+                    # 不消耗 attempt：新额度必须有一次被真正使用的机会。
                     if taken or event_id:
                         continue
                 if self._is_rate_limited(e) and attempt < 2:
+                    attempt += 1
                     await asyncio.sleep(1 + attempt)
                     continue
-                await asyncio.sleep(0.5 * (attempt + 1))
+                attempt += 1
+                await asyncio.sleep(0.5 * attempt)
         raise last_err or RuntimeError("未知发送错误")
 
     @staticmethod

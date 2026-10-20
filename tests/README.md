@@ -7,7 +7,7 @@ GUGUBot 官方直连改造版的自动化测试（全部独立可跑，无需真
 ```powershell
 $env:PYTHONIOENCODING = "utf-8"
 
-# 一次性跑全部 pytest 用例（当前 212 项，约 30s；含 11 个独立脚本的自动执行）
+# 一次性跑全部 pytest 用例（当前 237 项，约 60s；含 11 个独立脚本的自动执行）
 python -m pytest tests/ -q
 
 # 也可以直接 `python -m pytest`（仓库根有 pytest.ini，testpaths=tests）
@@ -34,6 +34,8 @@ python tests\test_lang_orphans.py       # 语言包孤儿键 / 单边漏译反�
 | test_player_manager_source_name.py | **PlayerManager 对自定义 source_name 的适配（v2.2.10 新增，11 项）**：`player.accounts` 的平台键是 `connector.QQ.source_name`（用户可自定义，默认 "QQ"）。① `get_player(..., platform=)` 按键**精确匹配** → 改名前的旧绑定（历史 "QQ" 键）查不到 → 系统误判「没绑过」→ **允许重复绑定**；② `is_admin()` 遍历 `connectors.items()`，其键是**配置节名**（恒为 "QQ"），旧实现却拿它与 source_name 比较 → 改名后恒为 False → **QQ 管理员分支整个被跳过、管理员判定失效**。现 QQ 平台的查询/判定都遍历「source_name 当前键 + 历史 "QQ" 键」，非 QQ 平台语义不变 |
 | test_bound_limit_source_name.py | **绑定上限与不活跃检查的单键查询（v2.2.10 新增，7 项）**：`bound.py` 绑定上限只查当前键 → 旧绑定不计入 → **可借改名绕过绑定上限**；`inactive_check.py` 只查当前键 → 历史键下的玩家**被漏检**（不活跃却不被清理/通知）。现两处都遍历「当前 source_name + 历史 "QQ" 键」 |
 | test_bound_unbind_source_name.py | **解绑权限/重复绑定/退群清理的单键查询（v2.2.10 新增，13 项）**：① 解绑权限检查只查当前键 → 改名前的旧绑定查不到 → **绑定者自己无法解绑**（非管理员被卡住）；② 重复绑定判重旧代码拿 **MC 玩家名**去比 **QQ 账号列表**（不同命名空间，几乎恒为 True）且只查当前键 → 改名前绑过的 QQ 号被**再绑一次**（两个键各存一份，解绑只能删一半）；③ 退群清理判断"其他平台绑定"时硬编码 `platform != "QQ"` → 改名后 QQ 绑定被误判成"其他平台"→ 残留**僵尸绑定**（玩家名留着、QQ 号没了）。现抽出 `_get_player_qq_accounts` / `_can_unbind` / `_is_account_bound` / `_has_other_platform_accounts` 四个方法 |
+| test_bound_empty_command.py | **bound 在官方 @机器人 消息形态下的回归（v2.2.10 新增，9 项）**：QQ 官方直连里 @机器人 时消息段是 `[at 段, text 段]`（长度 2），OneBot 是单段 → 旧代码用 `len(broadcast_info.message) == 1` 判「空命令」在官方模式下恒为 False → 空命令绕过 `_handle_command` 的帮助分支、掉进 `_handle_bind`，最终回的是 `bind_instruction`（用法提示）；而 OneBot 模式回的是 `user_help_msg`（系统帮助）→ **两种平台给用户的提示不一致**。现空命令判定只看「拼接后的命令文本是否为空」，两平台统一回系统帮助；并覆盖 @别人 时绑定到被 @ 的人、只有 at 段无文本时静默忽略、普通聊天不误触发 |
+| test_qq_official_send_resilience.py | **官方发送链路的边界加固（v2.2.10 新增，16 项）**：① `_send_group`/`_send_c2c` 用 `for attempt in range(3)` → **第 3 轮才遇到「被动引用失效」时，换到的新额度因轮次耗尽而根本没被用过**（本次发送直接失败）；改为 `while` + 独立的换额度计数（换额度不消耗轮次，但有上限防死循环）；② `reply_pool.take()` 的过期回收用 `keys.index()` 线性查找 → 池满 256 条时退化成 O(n²)，改为一次 `enumerate` 遍历；③ `reply_pool.take_event()` 清理条目用 `del`（键不存在会 KeyError）→ 改 `pop(..., None)`；④ `api_client` 鉴权重试没透传 `_net_attempt` → 网络重试次数被重置、最坏请求数翻倍；⑤ `api_client._seq_lock` 是**从未使用的死代码**却误导读者以为 msg_seq 分配有锁保护（实际由 reply_pool 的 RLock 保护）→ 删除 |
 | test_native.py | native_chat 分支：走原版 `/tellraw @a <JSON>` 系统消息通道（`ClientboundSystemChatPacket`，不触发聊天验证错误）；`[群名] [QQ转发]名字:` 拼接、引号/反斜杠/换行转义、`show_group_prefix` 只控制可选的 `[群名] ` 前缀（头部无条件保留）、`prefix_color` 上色 |
 | test_e2e.py | 完整数据流：官方 GROUP_MESSAGE_CREATE（带图片附件）→ 群号绑定 → 图片下载缓存（本地 http server）→ BroadcastInfo → MCConnector native_chat → `tellraw @a` 系统消息命令（CICode 公网 url 优先）+ C2C 链路 |
 | test_migration.py | 配置兼容实证：v2.2.4 老配置（token/群号/管理员/自定义群名/模板）迁移后用户值原样保留，新键（connection.type / official / native_chat）自动补全且默认不改变旧行为 |
