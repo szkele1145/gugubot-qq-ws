@@ -157,6 +157,25 @@ class GeneralHelpSystem(BasicSystem):
                 todo=todo_name,
                 vote=vote_name,
                 whoami=whoami_cmd,
+                # 官方状态占位符也一并传入：内置模板不用它，但**自定义
+                # 语言模板**若在 help_msg 里引用了 {official_status}，
+                # 缺参数会让 str.format 抛 KeyError → 用户收到异常而非
+                # 帮助文本。显示命令名本身无害（#状态 仍只对管理员生效）。
+                official_status=official_status_cmd,
+                # 同理补齐其余系统名占位符：自定义语言模板在 help_msg
+                # 里引用 {ban_words} / {whitelist} 等时，缺参数会抛
+                # KeyError。非管理员看到这些名字没有副作用（对应命令
+                # 本身仍受权限校验）。
+                ban_words=ban_words_name,
+                bound_notice=bound_notice_name,
+                whitelist=whitelist_name,
+                active_whitelist=active_whitelist_name,
+                startup_command=startup_command_name,
+                execute=execute_name,
+                execute_execute=execute_execute_cmd,
+                execute_mcdr=execute_mcdr_cmd,
+                unbound_check=unbound_check_name,
+                inactive_check=inactive_check_name,
             )
 
         await self.reply(broadcast_info, [MessageBuilder.text(help_msg)])
