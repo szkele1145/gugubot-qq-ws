@@ -88,6 +88,9 @@ gugubot:
 
             help_msg: "违禁词相关指令：\n{command_prefix}{name} {enable} -> 开启违禁词系统\n{command_prefix}{name} {disable} -> 关闭违禁词系统\n{command_prefix}{name} {list} -> 显示违禁词列表\n{command_prefix}{name} {add} <违禁词> [理由] -> 添加违禁词\n{command_prefix}{name} {remove} <违禁词> -> 删除指定违禁词"
 
+            cancel_success: "取消添加违禁词成功"
+            cancel_not_exist: "当前没有正在添加的违禁词"
+            add_timeout: "添加超时：{ban_word}"
         bound:
             name: "绑定"
             bind: "绑定"
@@ -168,6 +171,8 @@ gugubot:
 
             help_msg: "白名单相关指令：\n{command_prefix}{name} {list} -> 显示白名单列表\n{command_prefix}{name} {add} <玩家名> [模式] -> 添加玩家到白名单\n{command_prefix}{name} {remove} <玩家名> -> 从白名单移除玩家\n{command_prefix}{name} {enable} -> 启用服务器白名单\n{command_prefix}{name} {disable} -> 禁用服务器白名单\n\n模式说明：\n- online/在线/正版 -> 在线模式\n- offline/离线 -> 离线模式\n- bedrock/基岩/be -> 基岩版模式"
 
+            enable: "开启"
+            disable: "关闭"
         mg_event:
             name: "游戏事件"
 
@@ -549,3 +554,14 @@ gugubot:
             
             # 其他多语言支持
             or: "或"
+
+        config_check:
+            name: 配置检验
+            check: 检验
+        config_reload:
+            name: 重载配置
+            reload: 重载
+        official_status:
+            name: 状态
+            status: 状态
+            whoami: 我是谁

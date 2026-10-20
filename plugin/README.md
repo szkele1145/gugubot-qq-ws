@@ -125,12 +125,34 @@ GUGUBot 是一个专为 MCDReforged 设计的 QQ 机器人插件，支持离线�
 
 选择以下任一方案配置 QQ 机器人：
 
+**方案 A：官方直连（推荐，v2.2.6+）**
+
+无需任何中间件，直接用 [q.qq.com](https://q.qq.com) 申请的 AppID / AppSecret：
+
+```yaml
+connector:
+  QQ:
+    connection:
+      type: official          # 官方直连（默认 onebot 走中间件）
+      official:
+        appid: "你的AppID"
+        secret: "你的AppSecret"
+```
+
+> 官方平台只下发 openid，不给真实 QQ 号/群号。插件会给每个用户和群
+> 分配一个**虚拟号**（用户 `100000xxx`、群 `200000xxx`），配置里的
+> `admin_ids` / `group_ids` / `admin_group_ids` 必须填虚拟号。
+> 在群里 `@机器人` 发一句话即可查到自己的虚拟号（`#我是谁`），
+> 群号在首次收到该群消息时自动绑定到配置里的群号槽位。
+
+**方案 B：OneBot 中间件**
+
 - **[NapCat](https://napneko.github.io/)** - 推荐，稳定高效
 - **[LiteLoaderQQNT + LLOneBot](https://github.com/LLOneBot/LLOneBot)** - 轻量级方案
 
 配置 WebSocket 服务端口（如 `8080`），消息上报格式选择 **CQ 码** 或者 **消息体**。
 
-#### 3. GUGUBot 配置
+#### 2. GUGUBot 配置
 
 编辑 `/config/GUGUbot/config.yml`，配置以下必要项：
 
@@ -138,11 +160,11 @@ GUGUBot 是一个专为 MCDReforged 设计的 QQ 机器人插件，支持离线�
 connector:
   QQ:
     connection:
-      port: 8777  # WebSocket 服务端口
+      port: 8777  # OneBot WebSocket 服务端口（官方直连时不需要）
     permissions:
-      admin_ids:  # 管理员 QQ 号
+      admin_ids:  # 管理员 QQ 号（官方直连填虚拟号，#我是谁 可查）
         - 1234567890
-      group_ids:  # 要监听的 QQ 群号
+      group_ids:  # 要监听的 QQ 群号（官方直连填虚拟号或直接填 openid）
         - 123456789
 ```
 
@@ -196,6 +218,18 @@ connector:
 ```
 
 > 仅管理员可用
+
+### 管理命令（管理员）
+
+```
+#配置检验              # 配置语法 + 语义热校验（不重启，逐项列出问题）
+#重载配置              # 热重载配置文件，无需重启服务器
+#状态                  # 官方直连健康度：WS/token/回复池余量/群号绑定详情
+#我是谁                # 查自己的虚拟号、绑定信息、群内角色
+```
+
+> `#配置检验` 会在 `#重载配置` 后自动附带执行一次——改完配置不用再单独
+> 发一次校验命令。
 
 ### 其他功能
 
@@ -262,22 +296,26 @@ GUGUBot 提供了丰富的 API 接口，方便开发者进行二次开发或集�
 ### 项目结构
 
 ```
-PF-GUGUBot/
-├── GUGUbot/
-│   ├── gugubot/          # 核心代码
-│   │   ├── builder/      # 消息构建器
-│   │   ├── config/       # 配置管理
-│   │   ├── connector/    # 连接器（QQ、MC、Bridge）
-│   │   ├── logic/        # 逻辑系统
-│   │   │   ├── system/   # 核心系统（绑定、白名单等）
-│   │   │   └── plugins/  # 插件功能
-│   │   ├── parser/       # 消息解析器
-│   │   ├── utils/        # 工具类
-│   │   └── ws/           # WebSocket 服务
-│   ├── lang/             # 多语言支持
-│   └── requirements.txt  # 依赖列表
-├── docs/                 # 文档源文件
-└── tests/                # 测试文件
+gugubot-qq-ws/
+├── plugin/                 # MCDR 插件目录（打包 .mcdr 的内容）
+│   ├── gugubot/            # 核心代码
+│   │   ├── builder/        # 消息构建器（QQ / MC / Bridge）
+│   │   ├── config/         # 配置管理（含迁移与校验）
+│   │   ├── connector/      # 连接器（QQ / MC / Bridge）
+│   │   │   └── qq_official/  # 官方直连（WS 客户端 / API / ID 映射 / 回复池）
+│   │   ├── constant/       # 常量定义
+│   │   ├── logic/          # 逻辑系统
+│   │   │   ├── system/     # 核心系统（绑定、白名单、投票、配置校验…）
+│   │   │   └── plugins/    # 插件功能（未绑定检查、不活跃检查…）
+│   │   ├── parser/         # 消息解析器
+│   │   ├── utils/          # 工具类
+│   │   └── ws/             # WebSocket 服务
+│   ├── lang/               # 多语言支持（zh_cn / en_us）
+│   ├── requirements.txt    # Python 依赖（requests / ruamel.yaml / websocket-* / mcstatus）
+│   └── mcdreforged.plugin.json
+├── tests/                  # 测试文件（见 tests/README.md）
+├── 改造说明.md              # 官方直连改造的完整说明
+└── 通宵战报.md              # 开发过程记录
 ```
 
 ---

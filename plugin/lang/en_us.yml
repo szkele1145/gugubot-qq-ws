@@ -41,7 +41,7 @@ gugubot:
             name: "echo"
             help_msg: "Echo system related commands:\n{command_prefix}{name} {enable} -> Enable echo system\n{command_prefix}{name} {disable} -> Disable echo system"
 
-        key_word:
+        key_words:
             name: "keyword"
             add: "add"
             remove: "remove"
@@ -65,7 +65,7 @@ gugubot:
             help_msg: "Keyword related commands:\n{command_prefix}{name} {enable} -> Enable keyword system\n{command_prefix}{name} {disable} -> Disable keyword system\n{command_prefix}{name} {list} -> Show keyword list\n{command_prefix}{add} <keyword> -> Add keyword\n{command_prefix}{remove} <keyword> -> Delete specified keyword\n{command_prefix}{cancel} -> Cancel adding keyword"
             user_help_msg: "Keyword related commands:\n{command_prefix}{name} {list} -> Show keyword list\n{command_prefix}{add} <keyword> -> Add keyword\n{command_prefix}{remove} <keyword> -> Delete specified keyword\n{command_prefix}{cancel} -> Cancel adding keyword"
 
-        ban_word:
+        ban_words:
             name: "banword"
             add: "add"
             remove: "remove"
@@ -148,8 +148,8 @@ gugubot:
             add: "add"
             remove: "remove"
             list: "list"
-            whitelist_enable: "server_whitelist_on"
-            whitelist_disable: "server_whitelist_off"
+            enable: "server_whitelist_on"
+            disable: "server_whitelist_off"
 
             add_success: "Player added to whitelist"
             add_existed: "Player already in whitelist"
@@ -163,11 +163,11 @@ gugubot:
             list_content: "Whitelist:\n{player_list}"
             list_failed: "Failed to get whitelist"
 
-            whitelist_enable_success: "Server whitelist enabled"
-            whitelist_enable_failed: "Failed to enable server whitelist"
+            enable_success: "Server whitelist enabled"
+            enable_failed: "Failed to enable server whitelist"
 
-            whitelist_disable_success: "Server whitelist disabled"
-            whitelist_disable_failed: "Failed to disable server whitelist"
+            disable_success: "Server whitelist disabled"
+            disable_failed: "Failed to disable server whitelist"
 
             api_not_available: "Whitelist API not available"
 
@@ -300,6 +300,19 @@ gugubot:
             merged_bots_content: "Total online: {total_count} bots ({server_count} servers)\n\n{details}"
             merged_server_content: "Server status (Players: {player_count}, Bots: {bot_count}, {server_count} servers)\n\n{details}"
 
+            local_bots_label: "Fake players({count}):\n{player_list}"
+            local_no_bots: "Fake players(0)"
+            local_no_players: "Players(0)"
+            local_players_label: "Players({count}):\n{player_list}"
+            merged_bots_label: "  Fake players({count}):\n{player_list}"
+            merged_no_bots: "  Fake players(0)"
+            merged_no_players: "  Players(0)"
+            merged_players_label: "  Players({count}):\n{player_list}"
+            server_bots_count: "[{server_name}]({count})\n{player_list}"
+            server_label: "[{server_name}]"
+            server_no_bots: "[{server_name}](0)"
+            server_no_players: "[{server_name}](0 players)"
+            server_players_count: "[{server_name}]({count} players)\n{player_list}"
         tps:
             name: "tps"
             tps: "tps"
@@ -397,7 +410,7 @@ gugubot:
             removeAll: "removeAll"
             list: "list"
             types: "types"
-            abstain: "abstain"
+            withdraw: "abstain"
 
             # Vote type names
             shutdown_name: "Server Shutdown Vote"
@@ -416,7 +429,7 @@ gugubot:
             no_active_vote: "There is no active vote"
             vote_not_found: "Vote with index {index} not found"
             not_voted_yet: "You haven't voted on this yet, cannot abstain"
-            abstain_success: "{voter} withdrew their vote on {vote_name}"
+            withdraw_success: "{voter} withdrew their vote on {vote_name}"
 
             # Multiple vote type messages
             multiple_votes_reminder: |
@@ -431,7 +444,7 @@ gugubot:
               There are {count} votes in progress, please specify index:
               {vote_list}
               Example: {no_example}
-            multiple_votes_specify_abstain: |
+            multiple_votes_specify_withdraw: |
               There are {count} votes in progress, please specify index:
               {vote_list}
               Example: {abstain_example}
@@ -545,3 +558,13 @@ gugubot:
 
             # mutil-language support
             or: "or"
+        config_check:
+            name: config check
+            check: check
+        config_reload:
+            name: reload config
+            reload: reload
+        official_status:
+            name: status
+            status: status
+            whoami: whoami
