@@ -26,6 +26,7 @@ intents（订阅位）：
 
 from __future__ import annotations
 
+import inspect
 import json
 import threading
 import time
@@ -123,6 +124,8 @@ class QQOfficialWSClient:
         self._on_dispatch = on_dispatch
         self._on_ready = on_ready
         self._pool = reply_pool  # 回复池引用（心跳时顺带清理）
+        # on_dispatch 回调的参数个数（3 或 4）；None = 尚未探测
+        self._dispatch_arg_count: Optional[int] = None
 
         self.ws: Optional[websocket.WebSocketApp] = None
         self._ws_thread: Optional[threading.Thread] = None
@@ -146,8 +149,6 @@ class QQOfficialWSClient:
         self._hb_stop = threading.Event()
         self._hb_ack_miss = 0
         self._hb_generation = 0
-        # dispatch 回调签名探测结果（None=未探测；True=4参含 event_id；False=3参旧签名）
-        self._dispatch_is_4arg: Optional[bool] = None
         # 最近一次关闭码（4014 等鉴权类错误用长退避）
         self._last_close_code: Optional[int] = None
 
@@ -370,17 +371,31 @@ class QQOfficialWSClient:
 
         elif op == OP_INVALID_SESSION:
             # 官方规范：d=false → resume 被拒，需全新 Identify；d=true 可重试 resume
+            # d 的取值形态不保证是 JSON 布尔：可能是 false / "false" / 0，
+            # 因此不能写 `d_val is False`（只认恰好是布尔 False 的对象）——
+            # 漏判会让「已被官方判死的 session」被继续 Resume → 再次被拒 →
+            # 死循环。统一按「显式假值」判定。
             d_val = data.get("d")
-            if d_val is False:
+            is_invalid = d_val is False or d_val == 0 or (
+                isinstance(d_val, str) and d_val.strip().lower() in ("false", "0")
+            )
+            if is_invalid:
                 if logger:
                     logger.warning("[QQ官方] 会话失效（op:9 d=false），清除会话重新鉴权")
                 self.session_id = None
                 self.last_seq = None
                 self._acked_seq = None
+                # 主动断开重连：官方发 op:9 只说明「本 session 作废」，
+                # 不保证随后会关闭连接。若不主动重连，Identify 永远发不出去
+                # （Identify 只在新连接的 Hello 之后发）→ 连接看似还在、
+                # 实则已死，只能等心跳失活兜底（间隔最长 300s →
+                # 最坏情况离线近 10 分钟）。
+                self._schedule_reconnect()
             else:
                 if logger:
                     logger.warning("[QQ官方] 会话失效（op:9），稍后重试 Resume")
                 # 保留 session_id/last_seq，等下一个 Hello 时 _send_resume 重试
+                self._schedule_reconnect()
 
         else:
             if logger:
@@ -401,6 +416,30 @@ class QQOfficialWSClient:
             # 处理完成才推进 Resume 位点（官方推荐做法）
             if seq is not None:
                 self._acked_seq = seq
+
+    def _probe_dispatch_arity(self) -> int:
+        """探测 on_dispatch 回调可接受的参数个数（3 或 4）。
+
+        用 ``inspect.signature`` 静态求值，不通过「试调用 + 捕获 TypeError」
+        猜测——后者会把回调**内部**的业务 TypeError 误判成签名不匹配，
+        导致同一事件被处理两次。
+
+        探测失败（回调不是普通函数/签名不可读）时按 3 参处理（保守：
+        多传参数会让老回调直接 TypeError，少传只是拿不到 event_id）。
+        """
+        callback = self._on_dispatch
+        try:
+            sig = inspect.signature(callback)
+        except (TypeError, ValueError):
+            return 3
+        count = 0
+        for p in sig.parameters.values():
+            if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD):
+                count += 1
+            elif p.kind == p.VAR_POSITIONAL:
+                # *args → 可接受任意个数，按 4 处理（多传的 event_id 会被忽略）
+                return 4
+        return count if count >= 3 else 3
 
     def _handle_dispatch_inner(self, data: dict, seq) -> None:
         event_type = data.get("t", "")
@@ -442,21 +481,18 @@ class QQOfficialWSClient:
         if self._on_dispatch:
             try:
                 # 事件外层 id（event_id）一并传递：备用被动回复通道。
-                # 签名探测一次性完成：首个事件测试 4 参调用，TypeError
-                # 则判定旧签名并记住，此后不再重复试探（避免回调内部
-                # 业务 TypeError 被误判成签名问题导致事件重复处理）。
-                if getattr(self, "_dispatch_is_4arg", None) is None:
-                    try:
-                        self._on_dispatch(event_type, seq, payload, data.get("id", ""))
-                        self._dispatch_is_4arg = True
-                        return
-                    except TypeError as te:
-                        # 区分：旧签名（缺第 4 参）vs 回调内部错误
-                        if "argument" not in str(te) and "positional" not in str(te):
-                            raise  # 业务 TypeError：向上抛，不重试
-                        self._dispatch_is_4arg = False
-                if self._dispatch_is_4arg:
-                    self._on_dispatch(event_type, seq, payload, data.get("id", ""))
+                # 签名探测：早期版本用「先试 4 参、捕获 TypeError 再退回 3 参」
+                # 的方式猜签名——但回调**内部**抛出的 TypeError 会被误判成
+                # 「签名不对」→ 该事件被再处理一次（且首次调用的异常被吞）。
+                # 尤其业务错误文案里含 "argument"/"positional" 时（如
+                # "got an unexpected keyword argument"）必然误判。
+                # 现改用 inspect.signature 一次性数出回调可接受的参数个数，
+                # 判定不依赖任何异常。
+                if self._dispatch_arg_count is None:
+                    self._dispatch_arg_count = self._probe_dispatch_arity()
+                event_id = data.get("id", "")
+                if self._dispatch_arg_count >= 4:
+                    self._on_dispatch(event_type, seq, payload, event_id)
                 else:
                     self._on_dispatch(event_type, seq, payload)
             except Exception as e:
