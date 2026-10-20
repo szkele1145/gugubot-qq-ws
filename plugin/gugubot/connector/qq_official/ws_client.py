@@ -65,6 +65,39 @@ OP_HELLO = 10          # 服务端 → 客户端：连接建立后下发（含 h
 OP_HEARTBEAT_ACK = 11  # 服务端 → 客户端：心跳确认
 # （op:12 HTTP 回调 ACK、op:13 回调地址验证仅 webhook 模式使用，WS 模式无此交互）
 
+# WS 关闭码（官方文档《WebSocket 方式 · WebSocket 错误码》，2026-07-30 版）
+#
+#   4001 无效的 opcode          → 不可重试
+#   4002 无效的 payload         → 不可重试
+#   4006 无效的 session id      → 需重新 Identify
+#   4007 seq 错误               → 需重新 Identify
+#   4008 发送 payload 过快      → 可 Resume / Identify
+#   4009 连接过期               → 可 Resume / Identify
+#   4010 无效的 shard           → 不可重试
+#   4011 需处理的 guild 过多    → 不可重试
+#   4012 无效的 version         → 不可重试
+#   4013 无效的 intent          → 不可重试
+#   4014 intent 无权限          → 不可重试（等用户开通能力）
+#   4900~4913 内部错误          → 需重新 Identify
+#   4914 机器人已下架（仅沙箱） → 不可连接
+#   4915 机器人已封禁           → 不可连接
+#
+# **必须清空 session_id/last_seq 的码**：带失效 session 去 Resume 会被
+# 服务端反复拒绝，导致机器人永久离线（每次重连都拿旧 session 撞墙）。
+_CLEAR_SESSION_CODES = frozenset(
+    {4006, 4007, 4008, 4009} | set(range(4900, 4914))
+)
+
+# **不可重连**（重连必然再被拒，只会刷屏）：需要人工介入修配置/权限/账号
+_FATAL_CLOSE_CODES = frozenset({
+    4001, 4002, 4010, 4011, 4012, 4013,  # 协议/参数错误：改代码才能修
+    4014,                                 # 能力未开通：等审核（单独长退避处理）
+    4914, 4915,                           # 已下架 / 已封禁：联系官方解封
+})
+
+# 鉴权类：token/appid 错误，重连无意义
+_AUTH_CLOSE_CODES = frozenset({4010, 4011, 4012, 4013})
+
 
 class QQOfficialWSClient:
     """官方 WS 客户端：op 状态机 + 心跳线程 + 指数退避重连。
@@ -99,7 +132,14 @@ class QQOfficialWSClient:
 
         # 会话状态
         self.session_id: Optional[str] = None
+        # 最新**收到**的 seq —— 用于心跳包 d（官方要求 d=客户端收到的
+        # 最新消息 s）
         self.last_seq: Optional[int] = None
+        # 最新**处理完成**的 seq —— 用于 Resume（官方文档：「推荐开发者
+        # 在处理过事件之后记录下 s」）。与 last_seq 分离的意义：事件处理
+        # 抛异常时该事件并未真正处理，若把 seq 记到 last_seq，Resume
+        # 会跳过它 → 事件永久丢失。
+        self._acked_seq: Optional[int] = None
         self._heartbeat_interval: float = 30.0
         self._ready = False
         # 心跳线程控制（代数 token 防竞态）
@@ -217,6 +257,9 @@ class QQOfficialWSClient:
         if self._logger:
             self._logger.info("[QQ官方] WebSocket 已连接，等待 Hello…")
         # 鉴权在收到 op:2 Hello 后进行（需要 heartbeat_interval）
+        # 连接成功 → 清除上一次的失败标记：否则若曾遇 4014，后续每次
+        # 循环都会白白等 60s 长退避（尽管连接早已正常）。
+        self._last_close_code = None
 
     def _on_error(self, _, error) -> None:
         if self._logger:
@@ -225,10 +268,39 @@ class QQOfficialWSClient:
     def _on_close(self, _, status_code, reason) -> None:
         self._ready = False
         self._last_close_code = status_code
+        logger = self._logger
+
+        # ① 会话失效类：必须清空 session_id/last_seq，否则下次重连仍带
+        #    旧 session 去 Resume → 服务端再次拒绝 → 机器人永久离线。
+        if status_code in _CLEAR_SESSION_CODES:
+            self.session_id = None
+            self.last_seq = None
+            self._acked_seq = None
+            if logger:
+                logger.warning(
+                    f"[QQ官方] 关闭码 {status_code}：会话已失效，"
+                    f"已清除 session_id/seq，下次连接将重新 Identify"
+                )
+
+        # ② 已下架 / 已封禁：官方明确「不可以连接」→ 停止重连，避免刷屏
+        if status_code in (4914, 4915):
+            if logger:
+                logger.error(
+                    f"[QQ官方] 连接被拒(code={status_code} reason={reason})："
+                    + (
+                        "机器人已下架（只允许连接沙箱环境），请检查当前连接环境。"
+                        if status_code == 4914
+                        else "机器人已被封禁，请联系官方申请解封后再连接。"
+                    )
+                    + " 已停止重连。"
+                )
+            self._stop_event.set()
+            return
+
         if status_code == 4014:
             # disallowed intents：机器人未开通对应能力，重连必然再被拒
-            if self._logger:
-                self._logger.error(
+            if logger:
+                logger.error(
                     "[QQ官方] 连接被拒(4014 disallowed intents)：机器人未开通所订阅的消息能力。\n"
                     "  解决：q.qq.com → 机器人管理 → 开发/权限管理 → 申请并审核通过\n"
                     "  「QQ群」与「QQ单聊」能力；审核通过前可把配置里未开通的\n"
@@ -236,16 +308,18 @@ class QQOfficialWSClient:
                     "  下 group_at_messages / c2c_messages 设为 false）。\n"
                     "  60 秒后重试（等待你开通权限/修改配置）"
                 )
-        elif status_code in (4010, 4011, 4012, 4013):
-            # 鉴权类错误：token 无效/未授权——重连无意义，终止重试循环
-            if self._logger:
-                self._logger.error(
-                    f"[QQ官方] 鉴权失败(code={status_code} reason={reason})："
-                    f"请检查 appid/secret 是否正确、token 是否过期。停止重连。"
+        elif status_code in _AUTH_CLOSE_CODES:
+            # 鉴权/参数类错误：token 无效或 shard/version/intent 不合法
+            # ——重连无意义，终止重试循环
+            if logger:
+                logger.error(
+                    f"[QQ官方] 鉴权/参数失败(code={status_code} reason={reason})："
+                    f"请检查 appid/secret 是否正确、token 是否过期、shard/intent 配置是否合法。"
+                    f"停止重连。"
                 )
             self._stop_event.set()  # 让 _run_forever 循环退出
-        elif self._logger:
-            self._logger.info(
+        elif logger:
+            logger.info(
                 f"[QQ官方] WebSocket 关闭 (code={status_code} reason={reason})"
             )
 
@@ -302,6 +376,7 @@ class QQOfficialWSClient:
                     logger.warning("[QQ官方] 会话失效（op:9 d=false），清除会话重新鉴权")
                 self.session_id = None
                 self.last_seq = None
+                self._acked_seq = None
             else:
                 if logger:
                     logger.warning("[QQ官方] 会话失效（op:9），稍后重试 Resume")
@@ -313,9 +388,21 @@ class QQOfficialWSClient:
 
     def _handle_dispatch(self, data: dict) -> None:
         seq = data.get("s")
+        # 收到即记录：心跳包 d 要求「客户端收到的最新 s」，与是否处理完无关
         if seq is not None:
             self.last_seq = seq
+        try:
+            self._handle_dispatch_inner(data, seq)
+        except Exception:
+            # 处理失败 → **不**推进 _acked_seq：该事件未被真正处理，Resume
+            # 时应当由服务端补发（若在这里也记 seq，事件就永久丢了）。
+            raise
+        else:
+            # 处理完成才推进 Resume 位点（官方推荐做法）
+            if seq is not None:
+                self._acked_seq = seq
 
+    def _handle_dispatch_inner(self, data: dict, seq) -> None:
         event_type = data.get("t", "")
         payload = data.get("d") or {}
 
@@ -323,6 +410,9 @@ class QQOfficialWSClient:
             self.session_id = payload.get("session_id")
             user = payload.get("user") or {}
             self._ready = True
+            # 注意：这里**不要**清位点——READY 事件本身带 s（=1），外层
+            # 会统一记录 last_seq/_acked_seq；旧会话的位点作废已由
+            # 「关闭码 4006/4007/4900-4913」与「op:9 d=false」负责清理。
             if self._logger:
                 self._logger.info(
                     f"[QQ官方] 鉴权成功（READY），bot 开放平台 ID: {user.get('id')}；"
@@ -372,6 +462,10 @@ class QQOfficialWSClient:
             except Exception as e:
                 if self._logger:
                     self._logger.error(f"[QQ官方] 事件处理异常: {e}\n{traceback.format_exc()}")
+                # **重新抛出**：让调用方知道本事件未处理成功 → 不推进
+                # Resume 位点（_acked_seq）→ 断线重连时服务端补发该事件。
+                # 事件处理失败被静默吞掉 = 该事件永久丢失。
+                raise
 
     # ------------------------------------------------------------------ #
     # 发送控制帧
@@ -411,16 +505,21 @@ class QQOfficialWSClient:
 
     def _send_resume(self) -> None:
         token = f"QQBot {self._token_manager.get_token()}"
+        # Resume 的 seq 用**处理完成**的位点（_acked_seq），不是收到的
+        # （last_seq）——否则处理失败的事件会被跳过，永久丢失。
+        resume_seq = self._acked_seq if self._acked_seq is not None else 0
         payload = {
             "op": OP_RESUME,
             "d": {
                 "token": token,
                 "session_id": self.session_id,
-                "seq": self.last_seq if self.last_seq is not None else 0,
+                "seq": resume_seq,
             },
         }
         if self._logger:
-            self._logger.info(f"[QQ官方] 发送 Resume（恢复会话 {self.session_id}）")
+            self._logger.info(
+                f"[QQ官方] 发送 Resume（恢复会话 {self.session_id}，seq={resume_seq}）"
+            )
         self._send_json(payload)
 
     def _start_heartbeat(self) -> None:
