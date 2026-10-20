@@ -90,13 +90,20 @@ class QQOfficialClient:
           与消息发送均安全——官方按 msg_id+msg_seq 去重）
         - 429：流量限制，不刷新 token、不重试，直接抛出交由上层降级
         """
+        # 先取一次 token 并留住「本次实际使用的那枚」：
+        # 收到 401 时只作废这一枚，避免误伤其他线程刚刷新的新 token。
+        headers = self._headers()
+        used_token = headers.get("Authorization", "")
+        if used_token.startswith("QQBot "):
+            used_token = used_token[len("QQBot "):]
+
         try:
             resp = self._session.request(
                 method,
                 _API_BASE + path,
                 json=payload,
                 params=params,
-                headers=self._headers(),
+                headers=headers,
                 timeout=self._timeout,
             )
         except requests.RequestException as e:
@@ -120,7 +127,7 @@ class QQOfficialClient:
 
         # token 失效自动重试一次
         if resp.status_code in (401, 403) and retry_on_auth:
-            self._token.invalidate()
+            self._token.invalidate(used_token)
             return self._request(method, path, payload, params, retry_on_auth=False)
 
         trace_id = resp.headers.get("X-Tps-Trace-Id", "")
