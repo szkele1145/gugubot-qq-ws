@@ -134,15 +134,18 @@ class BoundSystem(BasicSystem):
         elif command.startswith(self.get_tr("list")):
             return await self._handle_list(broadcast_info)
         elif broadcast_info.is_admin:
-            # 管理员专属命令
-            if command in ["白名单检查", "whitelist_check"]:
-                return await self._handle_check_whitelist(broadcast_info)
-            elif command in ["移除未绑定白名单", "remove_unbound_whitelist"]:
-                return await self._handle_remove_unbound_whitelist(broadcast_info)
-            elif command in ["多余绑定检查", "extra_bound_check"]:
-                return await self._handle_check_extra_bound(broadcast_info)
-            elif command in ["移除多余绑定", "remove_extra_bound"]:
-                return await self._handle_remove_extra_bound(broadcast_info)
+            # 管理员专属命令。命令字一律从语言包取（get_tr），不再硬编码
+            # 中英双语列表——硬编码会让语言包里的同名条目变成死键，且新增
+            # 语言时必须同步改 Python 源码。
+            admin_subcommands = (
+                ("whitelist_check", self._handle_check_whitelist),
+                ("remove_unbound_whitelist", self._handle_remove_unbound_whitelist),
+                ("extra_bound_check", self._handle_check_extra_bound),
+                ("remove_extra_bound", self._handle_remove_extra_bound),
+            )
+            for key, handler in admin_subcommands:
+                if command == self.get_tr(key):
+                    return await handler(broadcast_info)
 
         return await self._handle_bind(broadcast_info)
 

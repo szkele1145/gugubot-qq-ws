@@ -16,6 +16,7 @@ gugubot:
         player_notice_error: "Player notice failed: {error}"
     
     connector:
+        name: "Connector"
         QQ:
             try_connect: "Trying to connect to: {url}"
             start_connect: "Starting QQ bot connection"
@@ -97,18 +98,15 @@ gugubot:
             unbind: "unbind"
             list: "list"
             search: "search"
-            check_whitelist: "whitelist_check"
             remove_unbound_whitelist: "remove_unbound_whitelist"
-            check_extra_bound: "extra_bound_check"
+            extra_bound_check: "extra_bound_check"
             remove_extra_bound: "remove_extra_bound"
 
             bind_success: "Bind successfully"
             bind_existed: "Player already exists"
-            bind_failed: "Bind failed"
             bind_instruction: "Please provide the player name to bind, format:\n{command_prefix}{name} {bind} mc_name [bedrock] - bind yourself\n{command_prefix}{name} {bind} [@123456] mc_name [bedrock] - bind others\nExample: {command_prefix}{name} {bind} Steve bedrock"
             bind_invalid_name: "Player name '{player_name}' does not match the required format\nRegex pattern: {pattern}"
             bind_pattern_error: "Regex pattern configuration error, please contact administrator"
-            already_bound: "Player already bound"
             max_bound_reached: "Binding limit reached"
 
             unbind_success: "Unbind successfully"
@@ -118,26 +116,16 @@ gugubot:
             no_permission: "You don't have permission to unbind this player"
 
             bind_list: "Your binding list:\n{player_list}"
-            bind_info: "Player {player_name} binding info:\n{info}"
 
-            search_instruction: "Please provide player name or QQ number to search"
             search_no_permission: "Only admins can search other players' bindings"
             search_result: "Player binding info:\n{info}"
 
-            whitelist_check_pass: "Whitelist check: All players are bound~"
-            whitelist_check_result: "Whitelist check:\n{result}"
-            whitelist_not_enabled: "Whitelist system is not enabled"
-            no_unbound_whitelist: "No unbound whitelist members~"
-            unbound_whitelist_removed: "Unbound whitelist members removed:\n{result}"
 
-            extra_bound_check_pass: "Extra binding check: All bound members are in groups~"
-            extra_bound_check_result: "Extra binding check:\n{result}"
-            no_extra_bound: "All bound members are in groups~"
-            extra_bound_removed: "Extra bound members removed:\n{result}"
 
             help_msg: "Bind related commands:\n{command_prefix}{name} {enable} -> Enable bind system\n{command_prefix}{name} {disable} -> Disable bind system\n{command_prefix}{name} {bind} <player_name> [bedrock] -> Bind player\n{command_prefix}{name} {bind} [@QQ] <player_name> [bedrock] -> Bind for others\n{command_prefix}{name} {unbind} -> Unbind all Java players (default)\n{command_prefix}{name} {unbind} [player_name] [bedrock] -> Unbind player\n{command_prefix}{name} {unbind} bedrock -> Unbind all Bedrock players\n{command_prefix}{name} {list} -> Show binding list\n{command_prefix}{name} {search} [player_name/QQ] -> Show binding info (admin can query others)\n\n【Admin-only Commands】\n{command_prefix}{name} 白名单检查 (whitelist_check) -> Check unbound players in whitelist\n{command_prefix}{name} 移除未绑定白名单 (remove_unbound_whitelist) -> Remove unbound players from whitelist\n{command_prefix}{name} 多余绑定检查 (extra_bound_check) -> Check bound members not in groups\n{command_prefix}{name} 移除多余绑定 (remove_extra_bound) -> Remove bound members not in groups\n\n【Parameter Description】\n- Bedrock: bedrock, be, true, 1 (default false)\n- Unbind with bedrock parameter unbinds corresponding version only\n- Unbind bedrock unbinds all Bedrock players of current user"
             user_help_msg: "Bind related commands:\n{command_prefix}{name} {bind} <player_name> [bedrock] -> Bind player\n{command_prefix}{name} {unbind} -> Unbind all Java players (default)\n{command_prefix}{name} {unbind} [player_name] [bedrock] -> Unbind player\n{command_prefix}{name} {unbind} bedrock -> Unbind all Bedrock players\n{command_prefix}{name} {list} -> Show binding list\n{command_prefix}{name} {search} -> Show your own binding info\n\nParameter description:\n- Bedrock: bedrock, be, true, 1 (default false)\n- Unbind with bedrock parameter unbinds corresponding version only\n- Unbind bedrock unbinds all Bedrock players of current user"
 
+            whitelist_check: "whitelist_check"
         bound_notice:
             name: "bind_notice"
             notice_message: "You have not bound your game account yet. Please use {command_prefix}{bound_name} command to bind your account for full functionality"
@@ -148,8 +136,6 @@ gugubot:
             add: "add"
             remove: "remove"
             list: "list"
-            enable: "server_whitelist_on"
-            disable: "server_whitelist_off"
 
             add_success: "Player added to whitelist"
             add_existed: "Player already in whitelist"
@@ -209,7 +195,6 @@ gugubot:
             execute: "execute"
             mcdr: "mcdr"
 
-            execute_instruction: "Please provide the MC native command to execute, format: {command_prefix}{execute} <command>"
             mcdr_instruction: "Please provide the MCDR command to execute, format: {command_prefix}{mcdr} <command>"
             execute_success: "Command executed"
             execute_failed: "Failed to execute command: {error}"
@@ -217,7 +202,6 @@ gugubot:
 
             bridge_execute_success: "Command sent via bridge to {target}"
             bridge_execute_failed: "Failed to send command via bridge: {error}"
-            bridge_target_not_found: "Target server not found: {target}"
             bridge_execute_disabled: "Bridge execute feature is disabled"
             bridge_not_found: "Bridge connector not found"
 
@@ -295,7 +279,6 @@ gugubot:
             bots_empty: "No bots online"
             bots_content: "Online bots({count}): {bots}"
             server_content: "Server status (Players: {player_count}, Bots: {bot_count})\n\n{details}"
-            merged_list_content: "Total online: {total_count} players ({server_count} servers)\n\n{details}"
             merged_players_content: "Total online: {total_count} players ({server_count} servers)\n\n{details}"
             merged_bots_content: "Total online: {total_count} bots ({server_count} servers)\n\n{details}"
             merged_server_content: "Server status (Players: {player_count}, Bots: {bot_count}, {server_count} servers)\n\n{details}"
@@ -506,9 +489,6 @@ gugubot:
               {voter} changed vote to {vote_type} for {vote_name}
               Yes/No/Total/Percentage: {yes_votes}/{no_votes}/{total_voters}/{current_percentage}
             vote_already_same: "You have already voted {vote_type}"
-            vote_progress: |
-              {voter} voted {vote_type} for {vote_name}
-              Yes/No/Total/Percentage: {yes_votes}/{no_votes}/{total_voters}/{current_percentage}
             vote_passed: |
               【Vote Passed】{initiator}'s {vote_name} passed!
               Yes/Total: {yes_votes}/{total_voters} ({current_percentage}%)
@@ -566,5 +546,3 @@ gugubot:
             reload: reload
         official_status:
             name: status
-            status: status
-            whoami: whoami

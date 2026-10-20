@@ -14,6 +14,7 @@ python -m pytest tests/ -q
 python tests\test_imports.py       # 全插件导入回归（OneBot+官方双路径）
 python tests\test_config_check.py  # 配置校验器独立校验
 python tests\test_lang_consistency.py  # 语言包键一致性（zh_cn ↔ en_us ↔ 代码引用）
+python tests\test_lang_orphans.py       # 语言包孤儿键 / 单边漏译反向检查
 ```
 
 ### pytest 用例（python -m pytest tests/ -q）
@@ -50,5 +51,7 @@ python tests\test_lang_consistency.py  # 语言包键一致性（zh_cn ↔ en_us
 |---|---|
 | test_imports.py | 主入口及全部子模块导入回归（stub mcdreforged），验证 OneBot 旧路径与官方新路径共存无冲突 |
 | test_config_check.py | 配置校验器的独立校验入口（语法 + 语义各项） |
-| test_lang_consistency.py | 语言包键一致性：静态扫描源码里所有 `get_tr("...")` 字面量 key 与 `BasicSystem.__init__` 注册名，逐一确认 zh_cn / en_us 都有对应条目，并比对两个语言文件的 system 段键集合完全一致。**防回归重点**——MCDR 的 `server.tr()` 找不到 key 时返回 key 字符串本身（不报错），键名错位会让命令前缀变成一串 key 路径 → 命令**静默失效**且无任何日志 |
+| test_bound_subcommand_i18n.py | 绑定系统管理员子命令的 i18n：命令字必须来自语言包（`get_tr`）而非硬编码；zh_cn / en_us 的值与旧硬编码**逐一比对一致**（行为不变）；源码不再出现中英双语命令字列表 |
+| test_lang_consistency.py | 语言包键一致性：静态扫描源码里所有 `get_tr("...")` 与 `BasicSystem.__init__` 注册名，逐一确认 zh_cn / en_us 都有对应条目，并比对两个语言文件的 system 段键集合完全一致。key 收集覆盖**动态形式**（变量赋值式 / 三元式 / 元组式 / 嵌套调用）。**防回归重点**——MCDR 的 `server.tr()` 找不到 key 时返回 key 字符串本身（不报错），键名错位会让命令前缀变成一串 key 路径 → 命令**静默失效**且无任何日志 |
+| test_lang_orphans.py | 语言包孤儿键反向检查：找出「两边都有但代码从不引用」的死键，并互查两个语言包的单边漏译（zh 有 en 无 / en 有 zh 无） |
 | diagnose_config.py | 配置问题诊断辅助脚本（人工排查用） |

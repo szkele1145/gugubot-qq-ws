@@ -34,11 +34,131 @@ REPO = Path(__file__).resolve().parent.parent
 LANG_DIR = REPO / "plugin" / "lang"
 SRC_DIR = REPO / "plugin" / "gugubot"
 
-# get_tr("literal") 的字面量 key（不含 global_key 调用的 gugubot.* 顶层键，
-# 那些在 lang 根下核对）
-GET_TR_RE = re.compile(r"""get_tr\(\s*['"]([A-Za-z0-9_.]+)['"]""")
+# get_tr(...) 的实参列表：需要**括号配对**提取（内部可能有嵌套括号/方括号，
+# 例如 get_tr("x", yes_votes=progress["yes_votes"])）。
+# 正则 `[^)]*` 会在 progress["x"] 的括号处提前截断，必须手工配对扫描。
+STR_LIT_RE = re.compile(r"""['"]([A-Za-z0-9_.]+)['"]""")
+# 动态 key 的来源：投票类型配置里的 name_key="xxx" / description_key="xxx"
+# 这类**关键字实参**里的字符串最终会被 get_tr(config.name_key) 取用，
+# 但静态扫描 get_tr() 调用点抓不到——必须单独收。
+DYN_KEY_RE = re.compile(
+    r"""\b(?:name_key|description_key)\s*=\s*['"]([A-Za-z0-9_]+)['"]"""
+)
+# 动态 key 形态二：变量赋值后经 get_tr(变量) 取用
+#     tr_key = "multiple_votes_specify_yes"
+#     self.get_tr(tr_key, ...)
+# 必须**两步**：先认出哪些变量被传给了 get_tr，再只收这些变量的赋值——
+# 否则会把源码里所有字符串赋值都收进来，校验形同虚设。
+GET_TR_VAR_RE = re.compile(r"""get_tr\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*[,)]""")
+VAR_ASSIGN_RE = re.compile(
+    r"""\b([A-Za-z_][A-Za-z0-9_]*)\s*=\s*['"]([A-Za-z0-9_]+)['"]"""
+)
+# 三元赋值：tr_key = "vote_new" if is_new_vote else "vote_changed"
+# 两侧分支分别抓取（正则本身只定位三元表达式的整体范围）。
+TERNARY_ASSIGN_RE = re.compile(
+    r"""\b([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(['"][^'"]+['"])\s+if\s+[^()\n]+?\s+else\s+(['"][^'"]+['"])"""
+)
+# 动态 key 形态三：元组/列表常量里的键名
+#     for key in ("name", "tps"):  self.get_tr(key)
+#     admin_subcommands = (("a", h1), ("b", h2))
+#     for key, handler in admin_subcommands: self.get_tr(key)
+# 两种形态都要覆盖：直接 for + 变量间接引用。
+TUPLE_KEY_RE = re.compile(
+    r"""for\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?:,\s*[A-Za-z_][A-Za-z0-9_]*\s*)?in\s+[\(\[\{]([^)\]\}]+)[\)\]\}]"""
+)
+# 变量 → 常量元组的间接引用：name = ( ... )
+# 元组里可能有**嵌套括号**（("key", self._handler)），正则不好精确匹配，
+# 改用配对扫描函数 iter_var_tuples()。
+VAR_TUPLE_ASSIGN_RE = re.compile(
+    r"""\b([A-Za-z_][A-Za-z0-9_]*)\s*=\s*[\(\[]"""
+)
+# for <var> in <名字>（名字是上面那种变量）
+FOR_IN_VAR_RE = re.compile(
+    r"""for\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?:,\s*[A-Za-z_][A-Za-z0-9_]*\s*)?in\s+([A-Za-z_][A-Za-z0-9_]*)\b"""
+)
 # 系统注册名：BasicSystem.__init__(self, "name", ...)
 SYSTEM_NAME_RE = re.compile(r"""BasicSystem\.__init__\(\s*self,\s*['"]([A-Za-z0-9_]+)['"]""")
+
+
+def iter_var_tuples(src: str):
+    """产出 (变量名, 常量元组/列表的源码文本)。
+
+    形如 ``admin_subcommands = (("a", h1), ("b", h2))``。用配对扫描正确
+    处理嵌套括号——正则很难精确匹配。
+    """
+    for m in VAR_TUPLE_ASSIGN_RE.finditer(src):
+        name = m.group(1)
+        start = m.end() - 1
+        opener = src[start]
+        closer = ")" if opener == "(" else "]"
+        depth = 0
+        k = start
+        while k < len(src):
+            ch = src[k]
+            if ch in "([":
+                depth += 1
+            elif ch in ")]":
+                depth -= 1
+                if depth == 0:
+                    break
+            k += 1
+        yield name, src[start:k + 1]
+
+
+def iter_get_tr_first_args(src: str):
+    """产出每个 ``get_tr(...)`` 调用的**第一个位置参数**（去掉首尾空白）。
+
+    手工做括号配对扫描，正确处理嵌套：
+        get_tr("x", a=b["c"])
+        get_tr("yes" if flag else "no")
+        get_tr("outer", title=self.get_tr("title"))   ← 内层也要抓
+    只取第一个位置参数——lang key 永远是它；后面的 ``name=value`` 是
+    **kwargs 格式化占位符（模板变量名），不是 lang key。
+    """
+    i = 0
+    n = len(src)
+    while True:
+        j = src.find("get_tr(", i)
+        if j < 0:
+            return
+        start = j + len("get_tr(")
+        depth = 1
+        k = start
+        while k < n and depth:
+            ch = src[k]
+            if ch in "([{":
+                depth += 1
+            elif ch in ")]}":
+                depth -= 1
+                if depth == 0:
+                    break
+            k += 1
+        args = src[start:k]
+
+        # 按顶层逗号切分实参（跳过括号/引号内部）
+        depth = 0
+        quote = None
+        cut = None
+        for idx, ch in enumerate(args):
+            if quote:
+                if ch == quote:
+                    quote = None
+                continue
+            if ch in "\"'":
+                quote = ch
+            elif ch in "([{":
+                depth += 1
+            elif ch in ")]}":
+                depth -= 1
+            elif ch == "," and depth == 0:
+                cut = idx
+                break
+        first = args if cut is None else args[:cut]
+        yield first.strip()
+
+        # 继续从**外层实参内部**往后找：嵌套的 get_tr("title") 也要抓。
+        # 注意不能跳过整个实参列表——那会漏掉嵌套调用。
+        i = start
 
 
 def load_lang(path: Path) -> dict:
@@ -70,12 +190,60 @@ def collect_code_keys():
             for m in SYSTEM_NAME_RE.finditer(src):
                 system_names.add(m.group(1))
 
-            for m in GET_TR_RE.finditer(src):
-                key = m.group(1)
-                if key.startswith("gugubot."):
-                    top_level.add(key)
-                else:
-                    all_keys.add(key)
+            for first in iter_get_tr_first_args(src):
+                # 第一个位置参数里的字符串字面量就是候选 key
+                # （三元表达式的各个分支都是位置参数，都要抓）
+                for lit in STR_LIT_RE.finditer(first):
+                    if lit.group(1).startswith("gugubot."):
+                        top_level.add(lit.group(1))
+                    else:
+                        all_keys.add(lit.group(1))
+
+            # 动态 key：name_key="xxx" / description_key="xxx"
+            # （最终经 get_tr(config.name_key) 取用，get_tr 调用点抓不到）
+            for m in DYN_KEY_RE.finditer(src):
+                all_keys.add(m.group(1))
+
+            # 动态 key：变量赋值后经 get_tr(变量) 取用
+            # （tr_key = "multiple_votes_specify_yes"）
+            # 两步走：先认出被传给 get_tr 的变量名，再只收这些变量的赋值
+            tr_vars = {m.group(1) for m in GET_TR_VAR_RE.finditer(src)}
+            if tr_vars:
+                for m in VAR_ASSIGN_RE.finditer(src):
+                    if m.group(1) in tr_vars:
+                        all_keys.add(m.group(2))
+                # 三元赋值：tr_key = "vote_new" if is_new_vote else "vote_changed"
+                # （两侧分支都是候选 key）
+                for m in TERNARY_ASSIGN_RE.finditer(src):
+                    if m.group(1) in tr_vars:
+                        all_keys.add(STR_LIT_RE.match(m.group(2)).group(1))
+                        all_keys.add(STR_LIT_RE.match(m.group(3)).group(1))
+
+            # 动态 key：元组/列表常量里的键名
+            # （for key in ("name", "tps"): self.get_tr(key)）
+            # 同样要两步：只认「循环变量被传给 get_tr」的那一处
+            tr_vars = {m.group(1) for m in GET_TR_VAR_RE.finditer(src)}
+            for m in TUPLE_KEY_RE.finditer(src):
+                loop_var = m.group(1)
+                if loop_var not in tr_vars:
+                    continue
+                for lit in re.findall(r"""['"]([A-Za-z0-9_]+)['"]""", m.group(2)):
+                    all_keys.add(lit)
+
+            # 动态 key（元组的间接引用）：
+            #     admin_subcommands = (("whitelist_check", h1), ...)
+            #     for key, handler in admin_subcommands: self.get_tr(key)
+            # 先收「变量 → 常量元组」的映射，再看哪些 for 循环在遍历它。
+            var_tuples = {}
+            for name, text in iter_var_tuples(src):
+                var_tuples[name] = text
+            for m in FOR_IN_VAR_RE.finditer(src):
+                loop_var = m.group(1)
+                seq_var = m.group(2)
+                if loop_var not in tr_vars or seq_var not in var_tuples:
+                    continue
+                for lit in re.findall(r"""['"]([A-Za-z0-9_]+)['"]""", var_tuples[seq_var]):
+                    all_keys.add(lit)
 
     return system_names, all_keys, top_level
 
