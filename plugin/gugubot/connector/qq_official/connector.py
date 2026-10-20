@@ -60,6 +60,46 @@ from gugubot.utils.types import ProcessedInfo
 # 模块级预编译（与 OneBot connector 的正则/flag 完全一致，语义不变）
 _COLOR_CODE_PATTERN = re.compile(r"§[0-9a-fk-or]", re.IGNORECASE)
 
+# ---------------------------------------------------------------------------
+# 官方 OpenAPI 错误码表
+#
+# 取自官方文档（2026-09 版）：
+#   · 《发送群聊消息 · 错误码》
+#   · 《API 调用指南 · OpenAPI 错误码》
+#
+# 注意：官方失败响应的**业务错误码在响应体里**，HTTP 状态码可能仍是 200，
+# 字段名是 ``err_code``（不是 ``code``）——见 api_client._request 的处理。
+# ---------------------------------------------------------------------------
+
+# 被动回复引用（msg_id / event_id / msg_seq）失效 → 必须丢弃该额度换下一条，
+# 重试同一个 id 必然继续失败。
+_STALE_REPLY_REF_CODES = frozenset({
+    304026,    # MSG_ID 回复的消息 id 错误
+    304027,    # MSG_EXPIRE 回复的消息过期
+    304103,    # 消息ID已过期，不能回复
+    40034005,  # 回复消息 msg_id 已过期
+    40034024,  # 请求参数 msg_id 无效或越权
+    40034025,  # 请求参数 event_id 无效
+    40034026,  # 请求参数 event_id 已过期
+    40034027,  # 该事件不支持回复消息
+    40034128,  # 被动回复时间或次数超限
+    40054005,  # 消息被去重（相同 msg_id + msg_seq 重复发送）
+})
+
+# 频控 / 主动消息超额 → 退避后复用同一条额度重试。
+_RATE_LIMIT_CODES = frozenset({
+    11244,     # （旧版）主动消息频控
+    20028,     # ChannelHitWriteRateLimit
+    304045,    # 子频道主动消息数限频
+    304047,    # 主动消息推送超过限制的子频道数
+    304049,    # 私信主动消息数限频
+    304050,    # 私信主动消息总量限频
+    304052,    # 发消息设置引导超频
+    40034100,  # 主动消息发送超过频控限制
+    1100100,   # 安全打击：消息被限频
+    1100308,   # 触发频道内限频
+})
+
 
 def strip_minecraft_color_codes(text: str) -> str:
     """去掉 MC 颜色代码（与 OneBot connector 保持一致）。
@@ -803,12 +843,28 @@ class QQOfficialConnector(BasicConnector):
 
         与「限频」严格区分：这类错误重试同一个 id 必然继续失败，必须
         丢弃该额度换下一条；限频则应当退避后复用同一条。
+
+        错误码取自官方文档《发送群聊消息 · 错误码》与《API 调用指南 ·
+        OpenAPI 错误码》（2026-09 版）：
+
+        - ``304103``  消息ID已过期，不能回复
+        - ``40034005`` 回复消息 msg_id 已过期
+        - ``40034024`` 请求参数 msg_id 无效或越权
+        - ``40034025`` 请求参数 event_id 无效
+        - ``40034026`` 请求参数 event_id 已过期
+        - ``40034027`` 该事件不支持回复消息
+        - ``40034128`` 被动回复时间或次数超限
+        - ``40054005`` 消息被去重（msg_id + msg_seq 重复）
+        - ``304026``  MSG_ID 回复的消息 id 错误
+        - ``304027``  MSG_EXPIRE 回复的消息过期
         """
-        # 官方已知被动回复相关错误码：22009 msg_id 非法/过期
-        if e.code in (22009, 22010, 22011):
+        if e.code in _STALE_REPLY_REF_CODES:
             return True
-        if e.status not in (400, 404):
-            return False
+        # 文案兜底：官方未列出的错误码时按 message 判断。
+        # 注意**不能限定 HTTP 状态码**——官方业务错误常以 HTTP 200 返回
+        # （err_code 在 body 里），限定 400/404 会让未收录的失效码漏判，
+        # 结果是每次发送都撞同一个废 id、白白退避重试 3 次。
+        # 官方文档提醒 message 可能调整，这里只作辅助手段。
         text = (getattr(e, "message", "") or "").lower()
         if not any(k in text for k in ("msg_id", "msgid", "event_id", "msg_seq")):
             return False
@@ -822,10 +878,10 @@ class QQOfficialConnector(BasicConnector):
         """官方主动消息超限/频控错误码段。"""
         if e.status == 429:
             return True
-        # 官方常见限频/超限 code：HTTP 200 但 code 带 11253/11244 等
-        return e.code in (11244, 11253, 130000, 130001, 130002, 240, 241) or (
-            130000 <= e.code <= 130999
-        )
+        if e.code in _RATE_LIMIT_CODES:
+            return True
+        # 130000~130999 段（旧版频道相关限频码）
+        return 130000 <= e.code <= 130999
 
     # ------------------------------------------------------------------ #
     # 消息转换

@@ -30,6 +30,18 @@ MSG_TYPE_TEXT = 0      # 纯文本（content 字段）
 MSG_TYPE_MARKDOWN = 2  # Markdown（markdown.content 字段）
 MSG_TYPE_MEDIA = 7     # 富媒体（media.file_info 字段，来自 /files 上传）
 
+# 鉴权类错误码（官方《API 调用指南 · OpenAPI 错误码 · 公共错误码》）
+# 这些错误码**可能伴随 HTTP 200 返回**，此时必须同样走「刷新 token 重试」
+# ——否则 access_token 过期后所有请求都会静默失败。
+_AUTH_ERR_CODES = frozenset({
+    11241,     # ErrorWrongToken 参数中缺少 token
+    11242,     # ErrorCheckTokenFailed 校验 token 失败（系统错误，可重试）
+    11243,     # ErrorCheckTokenNotPass 校验 token 未通过
+    11251,     # ErrorWrongAppid 参数中的 appid 错误
+    11261,     # ErrorWrongAppid 参数中缺少 appid
+    11265,     # ErrorRobotHasBaned 机器人已经被封禁
+})
+
 
 class QQOfficialAPIError(RuntimeError):
     """QQ 官方 API 调用错误。"""
@@ -115,6 +127,39 @@ class QQOfficialClient:
                 )
             raise QQOfficialAPIError(0, 0, f"网络异常: {e}") from e
 
+        trace_id = resp.headers.get("X-Tps-Trace-Id", "")
+
+        # 解析响应体（业务错误可能藏在 HTTP 200 里）
+        body: Optional[Dict[str, Any]] = None
+        if resp.status_code != 204:
+            try:
+                parsed = resp.json()
+                if isinstance(parsed, dict):
+                    body = parsed
+            except Exception:
+                body = None
+
+        # 业务错误码：官方文档明确字段名是 err_code（少数历史接口用
+        # code），成功时为 0；HTTP 状态码可能仍是 200。
+        err_code: Optional[int] = None
+        if body is not None:
+            raw = body.get("err_code")
+            if raw is None:
+                raw = body.get("code")
+            if isinstance(raw, int):
+                err_code = raw
+
+        # 鉴权失效：token 过期/校验失败（HTTP 401/403 或 body err_code
+        # 11241/11242/11243 —— 官方公共错误码里的 token 类错误）。
+        # 刷新后重试一次；重试仍失败则原样抛出。
+        is_auth_err = (
+            resp.status_code in (401, 403)
+            or err_code in _AUTH_ERR_CODES
+        )
+        if is_auth_err and retry_on_auth:
+            self._token.invalidate(used_token)
+            return self._request(method, path, payload, params, retry_on_auth=False)
+
         # 429 流量限制：不刷新 token、不重试，事件级直接抛出，
         # 避免把限流误判为 token 失效导致无效刷新。
         if resp.status_code == 429:
@@ -122,31 +167,34 @@ class QQOfficialClient:
                 self._logger.warning(
                     f"[QQ官方API] 触发 429 流量限制 {path}，直接失败不重试"
                 )
-            trace_id = resp.headers.get("X-Tps-Trace-Id", "")
-            raise QQOfficialAPIError(429, 42900, "触发流量限制（429）", trace_id)
+            raise QQOfficialAPIError(429, err_code or 42900, "触发流量限制（429）", trace_id)
 
-        # token 失效自动重试一次
-        if resp.status_code in (401, 403) and retry_on_auth:
-            self._token.invalidate(used_token)
-            return self._request(method, path, payload, params, retry_on_auth=False)
+        # 业务错误（err_code != 0，HTTP 可能 200）：以 err_code 为准，
+        # 不依据 message 判定（官方文档明确 message 可能随时调整）。
+        if err_code is not None and err_code != 0:
+            err_msg = body.get("message") or resp.text[:200]
+            raise QQOfficialAPIError(
+                resp.status_code, err_code, err_msg, body.get("trace_id") or trace_id
+            )
 
-        trace_id = resp.headers.get("X-Tps-Trace-Id", "")
         if resp.status_code >= 400:
-            try:
-                err = resp.json()
-                code = err.get("code", resp.status_code * 100)
-                message = err.get("message", resp.text[:200])
-            except Exception:
+            if body is not None:
+                code = body.get("err_code")
+                if not isinstance(code, int):
+                    code = body.get("code")
+                if not isinstance(code, int):
+                    code = resp.status_code * 100
+                message = body.get("message", resp.text[:200])
+            else:
                 code = resp.status_code * 100
                 message = resp.text[:200]
             raise QQOfficialAPIError(resp.status_code, code, message, trace_id)
 
+        if body is not None:
+            return body
         if resp.status_code == 204 or not resp.content:
             return {}
-        try:
-            return resp.json()
-        except ValueError:
-            return {"raw": resp.text}
+        return {"raw": resp.text}
 
     # ------------------------------------------------------------------ #
     # 发消息（Gensokyo 式被动回复绕限额逻辑在此）

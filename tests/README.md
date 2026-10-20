@@ -29,7 +29,7 @@ python tests\test_lang_orphans.py       # 语言包孤儿键 / 单边漏译反�
 | test_status.py | `#状态`（WS/token/池/绑定/event_id 余量全展示）与 `#我是谁`（虚拟号/绑定/群角色）：官方模式响应、权限校验、OneBot 模式自动跳过（duck typing 判定） |
 | test_send_quota.py | 额度守卫：限频重试全程复用首取的 msg_id/msg_seq（3 次尝试仅 1 次取池，不浪费被动回复额度） |
 | test_reply_pool.py | 被动额度池不变量：msg_seq 0..4 递增后用尽回收、最新优先、event_id 独立计数、msg 用尽但 event 有额度时条目必须保留、drop/drop_event 语义、TTL 与 cleanup 判据一致性、池上限淘汰、add 回填 event_id；发送链路：失效 msg_id/event_id 被丢弃并换下一条、限频不误丢、C2C event_id 回退存在性、api_client 载荷带 msg_seq/event_id |
-| test_rate_limit.py | REST 客户端 v2.2.9 回归：429 恰好 1 次请求（不重试）、不调用 token.invalidate()（限流≠鉴权失效）、429 错误经 `_is_rate_limited` 判为限频且不被 `_is_stale_reply_ref` 误判为失效额度；401/403 仍刷新 token 并重试一次（回归保护）；超时可配置（默认 15s，可覆盖） |
+| test_rate_limit.py | **官方 REST 客户端错误语义（v2.2.10 重写）**：429 恰好 1 次请求（不重试）、不调用 token.invalidate()（限流≠鉴权失效）、429 经 `_is_rate_limited` 判为限频且不被 `_is_stale_reply_ref` 误判为失效额度；401/403 与**业务鉴权码**（11241/11242/11243，常以 HTTP 200 返回）均刷新 token 并重试一次；**HTTP 200 里的 `err_code` 业务错误必须抛异常**（官方规定字段名是 `err_code` 而非 `code`，且失败时 HTTP 状态码可能仍是 200——此前全部被当成发送成功）；`err_code=0` 视为成功；无 err_code 的成功体原样返回；官方失效码/频控码分类正确；**未收录的失效码在 HTTP 200 下仍能靠文案兜底识别**；超时可配置（默认 15s，可覆盖）<br>⚠️ 此文件此前**从未真正执行过**（无模块级 `test_*` → pytest 收集不到；桩挂在 `requests.request` 而实现走 `self._session.request` → 桩未生效；`FakeToken.invalidate` 签名不符 → 直接运行 TypeError），已重写为标准 pytest 用例 |
 | test_split_message.py | 长消息分片：按 `max_message_length` 切分、不丢字不重叠、空文本/单字符边界、超长单段不被吞掉 |
 | test_config_numeric.py | 数值型配置的入口钳制：`max_message_length` ≤0 被夹为正整数（避免分片死循环）、限频/超时等字段的取值范围与类型兜底 |
 | test_config_reload.py | `#重载配置` 热重载：系统/连接器 `reload_config()` 钩子被调用、`enable` 状态重同步、钩子返回值并入反馈、重载后自动跑一遍语义校验 |
