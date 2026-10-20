@@ -83,6 +83,33 @@ def _has_ids(ids: Optional[Iterable]) -> bool:
 class QQOfficialParser(BasicParser):
     """QQ 官方平台事件解析器。"""
 
+    # 「本群没有可用配置槽位」「该群不在监听列表」的提示去重集合。
+    # 旧实现对每条消息都打一条 info → 群里正常聊天频率下
+    # 每条消息刷一行日志（生产环境直接写盘）。现每个群只提示一次，
+    # 成功绑定后从集合移除（用户补了配置可再次提示）。
+    #
+    # 声明为**类级空集**只是为了让「用 ``__new__`` 绕过 __init__ 构造」的
+    # 场景不报 AttributeError；实际写入走 ``_warned_sets()``，它会为
+    # 当前实例建立**独立**的集合，绝不会污染类级默认。
+    _no_slot_warned: set = set()
+    _not_listened_warned: set = set()
+
+    def __init__(self, connector) -> None:
+        super().__init__(connector)
+        # 每个实例独立的去重集合（不与类级默认共享）
+        self._no_slot_warned = set()
+        self._not_listened_warned = set()
+
+    def _warned_sets(self) -> tuple:
+        """返回本实例的两个提示去重集合（惰性创建，兼容绕过 __init__ 的构造）。"""
+        warned = self.__dict__.get("_no_slot_warned")
+        if warned is None or warned is QQOfficialParser._no_slot_warned:
+            warned = self._no_slot_warned = set()
+        listened = self.__dict__.get("_not_listened_warned")
+        if listened is None or listened is QQOfficialParser._not_listened_warned:
+            listened = self._not_listened_warned = set()
+        return warned, listened
+
     def _is_admin(self, sender_id, source_id=None) -> bool:
         """检查是否是管理员（sender_id 已是虚拟号）。
 
@@ -232,15 +259,21 @@ class QQOfficialParser(BasicParser):
         #   消息到达时按登记顺序自动绑定，实现旧配置完全兼容）
         if not id_mapper.legacy_group_display_id(group_openid):
             bound = id_mapper.bind_group_openid(group_openid)
+            no_slot_warned, _ = self._warned_sets()
             if bound is not None:
                 # 绑定成功：清除 connector 的"未绑定警告"去重标记
                 # （若该群此前广播被跳过并 warning 过，恢复提示资格）
                 warned = getattr(connector, "_warned_unbound", None)
                 if warned is not None:
                     warned.discard(str(bound))
-            elif self.logger:
+                # 绑定成功 → 该群不再缺槽位，移除本解析器的去重标记
+                no_slot_warned.discard(group_openid)
+            elif self.logger and group_openid not in no_slot_warned:
                 # 无可绑定槽位：该群用虚拟号继续（仅当配置含虚拟号或
                 # 后续绑定时才会转发），打 info 便于排查
+                # **每个群只提示一次**：该分支在「该群没有可用槽位」时
+                # 每条消息都会走到，不去重就是每条消息刷一行日志。
+                no_slot_warned.add(group_openid)
                 display = id_mapper.group_legacy_display(group_openid)
                 self.logger.info(
                     f"[QQ官方] 群 {group_openid} 没有可用配置槽位，"
@@ -271,7 +304,11 @@ class QQOfficialParser(BasicParser):
 
         # 权限校验：该群是否在监听列表（含绑定真实群号）
         if not self._is_valid_group(legacy_group):
-            if self.logger:
+            # **每个群只提示一次**：不在监听列表的群每条消息都会走到这里，
+            # 不去重就是每条消息刷一行 info。
+            _, not_listened = self._warned_sets()
+            if self.logger and legacy_group not in not_listened:
+                not_listened.add(legacy_group)
                 self.logger.info(
                     f"[QQ官方] 群 {legacy_group}（openid {group_openid}）"
                     f"不在监听列表（group_ids/admin_group_ids），消息已忽略"
@@ -503,7 +540,10 @@ class QQOfficialParser(BasicParser):
             if not isinstance(att, dict):
                 continue
             content_type = att.get("content_type", "") or ""
-            url = att.get("url", "") or att.get("url_https", "") or ""
+            # **优先用 https**：官方同时下发 url（明文 http）与 url_https，
+            # 旧实现优先取 url → 附件走明文下载，可被中间人劫持/篡改
+            # （且 http CDN 常 302 到 https，多一次跳转）。
+            url = att.get("url_https", "") or att.get("url", "") or ""
             filename = att.get("filename", "附件")
             summary = (att.get("summary", "") or "").strip().strip("[]")
             file_data = {"url": url, "file": filename}
@@ -566,17 +606,72 @@ class QQOfficialParser(BasicParser):
             local = data_dir / f"{digest}{ext}"
 
             if not local.exists():
-                resp = requests.get(url, timeout=20)
-                resp.raise_for_status()
-                local.write_bytes(resp.content)
+                if not self._download_attachment(url, local):
+                    # 下载失败/超限 → 不返回不存在的路径（下游会拿它去
+                    # 渲染图片，必然 404）。返回 None 表示「只给 url」。
+                    return None
                 # 触碰 mtime：LRU 依据（重复出现的图保持"最新"）
-                os.utime(local, None)
+                try:
+                    os.utime(local, None)
+                except OSError:
+                    pass
 
             return str(local)
         except Exception as e:
             if self.logger:
                 self.logger.debug(f"[QQ官方] 附件缓存失败（将直接用 url）: {e}")
             return None
+
+    # 单个附件大小上限（默认 32MB）：超出即放弃缓存并删除半成品。
+    # 旧实现用 ``requests.get(...)`` + ``resp.content`` 一次性把整个
+    # 文件读进内存——异常大文件会打爆内存，且缓存上限（LRU）是**下次**
+    # 下载时才清理，救不了当次。
+    _ATTACHMENT_MAX_BYTES = 32 * 1024 * 1024
+
+    def _download_attachment(self, url: str, local) -> bool:
+        """流式下载附件到 local（失败返回 False）。
+
+        使用 ``stream=True`` + 分块写入 + Content-Length 预检：
+        既不把整个文件读进内存，也能在超限时提前放弃。
+        """
+        tmp = local.with_suffix(local.suffix + ".part")
+        try:
+            with requests.get(url, timeout=20, stream=True) as resp:
+                resp.raise_for_status()
+                declared = resp.headers.get("Content-Length")
+                if declared and declared.isdigit() and int(declared) > self._ATTACHMENT_MAX_BYTES:
+                    if self.logger:
+                        self.logger.debug(
+                            f"[QQ官方] 附件过大（{declared}B > {self._ATTACHMENT_MAX_BYTES}B），跳过缓存"
+                        )
+                    return False
+                written = 0
+                with open(tmp, "wb") as fh:
+                    for chunk in resp.iter_content(chunk_size=64 * 1024):
+                        if not chunk:
+                            continue
+                        written += len(chunk)
+                        if written > self._ATTACHMENT_MAX_BYTES:
+                            if self.logger:
+                                self.logger.debug(
+                                    f"[QQ官方] 附件下载超过上限 "
+                                    f"（{self._ATTACHMENT_MAX_BYTES}B），中止并放弃缓存"
+                                )
+                            return False
+                        fh.write(chunk)
+            tmp.replace(local)
+            return True
+        except Exception as e:
+            if self.logger:
+                self.logger.debug(f"[QQ官方] 附件下载失败（将直接用 url）: {e}")
+            return False
+        finally:
+            # 清理半成品（失败/中止时留下的 .part）
+            try:
+                if tmp.exists():
+                    tmp.unlink()
+            except OSError:
+                pass
 
     @classmethod
     def _cleanup_attachment_cache(cls, data_dir) -> None:
@@ -591,6 +686,7 @@ class QQOfficialParser(BasicParser):
             if max_bytes <= 0:
                 return
             files = []
+            stale_parts = []
             with os.scandir(data_dir) as it:
                 for entry in it:
                     try:
@@ -599,7 +695,17 @@ class QQOfficialParser(BasicParser):
                         st = entry.stat()
                     except OSError:
                         continue
+                    # 下载中断留下的 .part 半成品：没有任何价值，
+                    # 直接清掉（不算入缓存占用统计）
+                    if entry.name.endswith(".part"):
+                        stale_parts.append(entry.path)
+                        continue
                     files.append((st.st_mtime, st.st_size, entry.path))
+            for path in stale_parts:
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
             total = sum(s for _, s, _ in files)
             if total <= max_bytes:
                 return
