@@ -74,6 +74,14 @@ class EchoSystem(BasicSystem):
                     if source_openid in admin_openids:
                         # 管理群消息不广播，直接返回False
                         return False
+                else:
+                    # OneBot 链路没有 id_mapper：source_id 本身就是真实群号，
+                    # 直接按字符串比对即可。
+                    # （早期这里因 AttributeError 被 getattr 兜底成"整个跳过"，
+                    #   导致 OneBot 模式下管理群的消息被错误地 echo 广播出去。）
+                    admin_group_strs = {str(gid) for gid in admin_group_ids if gid}
+                    if str(broadcast_info.source_id) in admin_group_strs:
+                        return False
 
         if broadcast_info.event_type != "message":
             return False
