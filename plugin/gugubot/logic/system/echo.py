@@ -50,12 +50,16 @@ class EchoSystem(BasicSystem):
         if not self.enable:
             return False
 
+        # QQ 来源名（用户可自定义 source_name，不能硬编码 "QQ"——否则改名后
+        # 私聊会被当成普通消息广播到 MC）
+        qq_source = self.config.get_keys(["connector", "QQ", "source_name"], "QQ")
+
         # 检查是否是QQ私聊消息，如果是则不广播
-        if broadcast_info.source.is_from("QQ") and broadcast_info.event_sub_type == "private":
+        if broadcast_info.source.is_from(qq_source) and broadcast_info.event_sub_type == "private":
             return False
 
         # 检查是否是QQ管理群的消息，如果是则不广播
-        if broadcast_info.source.is_from("QQ") and broadcast_info.event_sub_type == "group":
+        if broadcast_info.source.is_from(qq_source) and broadcast_info.event_sub_type == "group":
             admin_group_ids = self.config.get_keys(
                 ["connector", "QQ", "permissions", "admin_group_ids"], []
             )

@@ -601,8 +601,9 @@ class QQOfficialConnector(BasicConnector):
 
         message = self._strip_color_codes_from_message(message)
 
-        # 非 QQ 来源 → 加 [{来源}] {发送者}: 前缀（与 OneBot connector 一致）
-        if not source.is_from("QQ") and source.origin and processed_info.sender:
+        # 非 QQ 来源 → 加 [{来源}] {发送者}: 前缀（与 OneBot connector 一致；
+        # source_name 用户可自定义，不能硬编码 "QQ"）
+        if not source.is_from(self.source) and source.origin and processed_info.sender:
             chat_templates = self.config.get_keys(
                 ["connector", "QQ", "chat_templates"], []
             )
@@ -619,7 +620,7 @@ class QQOfficialConnector(BasicConnector):
             message = source_message + message
 
         elif (
-            not source.is_from("QQ")
+            not source.is_from(self.source)
             and source.origin
             and processed_info.sender == ""
         ):

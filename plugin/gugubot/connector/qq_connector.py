@@ -371,7 +371,8 @@ class QQWebSocketConnector(BasicConnector):
         message = self._strip_color_codes_from_message(message)
 
         # Prepend a source prefix when the message originates outside QQ
-        if not source.is_from("QQ") and source.origin and processed_info.sender:
+        # （source_name 用户可自定义，不能硬编码 "QQ"）
+        if not source.is_from(self.source) and source.origin and processed_info.sender:
             chat_templates = self.config.get_keys(
                 ["connector", "QQ", "chat_templates"], []
             )
@@ -414,7 +415,7 @@ class QQWebSocketConnector(BasicConnector):
             message = source_message + message
 
         # Join/leave messages have an empty sender — only show the source tag
-        elif not source.is_from("QQ") and source.origin and processed_info.sender == "":
+        elif not source.is_from(self.source) and source.origin and processed_info.sender == "":
             message = CQHandler.parse(f"[{source.origin}] ") + message
 
         # Max message length before splitting (configurable, default 2000)

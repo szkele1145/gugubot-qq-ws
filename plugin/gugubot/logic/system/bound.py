@@ -38,6 +38,27 @@ class BoundSystem(BasicSystem):
         """设置白名单系统引用"""
         self.whitelist = whitelist
 
+    def _qq_platform_keys(self) -> List[str]:
+        """QQ 账号在 PlayerManager 里可能使用的平台键（按优先级）。
+
+        绑定时写入的键是 ``broadcast_info.source.origin``——也就是用户
+        自定义的 ``connector.QQ.source_name``（默认 "QQ"）。历史数据里
+        也可能存在默认键 "QQ"。
+
+        早期实现多处硬编码 ``"QQ"``：一旦用户把 source_name 改成别的
+        名字（如 "我的QQ"），绑定会写进 ``accounts["我的QQ"]``，而解绑 /
+        查询仍去动 ``accounts["QQ"]`` → **解绑无效、查询查不到**。
+        因此这里返回全部候选键（当前键优先 + 兼容历史 "QQ"），由调用方
+        遍历处理。
+        """
+        current = self.config.get_keys(
+            ["connector", "QQ", "source_name"], "QQ"
+        ) or "QQ"
+        keys = [str(current)]
+        if "QQ" not in keys:
+            keys.append("QQ")
+        return keys
+
     async def process_broadcast_info(self, broadcast_info: BroadcastInfo) -> bool:
         """处理接收到的命令。
 
@@ -58,7 +79,9 @@ class BoundSystem(BasicSystem):
             broadcast_info.event_type == "notice"
             and broadcast_info.event_sub_type == "group_decrease"
         ):
-            if broadcast_info.source.is_from("QQ"):
+            if broadcast_info.source.is_from(
+                self.config.get_keys(["connector", "QQ", "source_name"], "QQ")
+            ):
                 return await self._handle_quit_member(broadcast_info)
             return False
 
@@ -373,7 +396,10 @@ class BoundSystem(BasicSystem):
                 target_id: str,
             ):
                 """如果是QQ来源，则设置群名片"""
-                if platform == "QQ" and self.config.get_keys(
+                # platform 是 broadcast_info.source.origin（即用户自定义的
+                # connector.QQ.source_name），不能硬编码 "QQ"——用户改名后
+                # 群名片功能会静默失效。
+                if platform in self._qq_platform_keys() and self.config.get_keys(
                     ["connector", "QQ", "others", "change_group_card"], True
                 ):
                     qq_connector = self.system_manager.connector_manager.get_connector(
@@ -816,8 +842,13 @@ class BoundSystem(BasicSystem):
                 str(gid) for gid in admin_group_ids if gid
             ]
 
-            # 获取该用户的绑定信息
-            player = self.player_manager.get_player(user_id, platform="QQ")
+            # 获取该用户的绑定信息（兼容自定义 source_name：可能在
+            # accounts["我的QQ"]，也可能在历史键 accounts["QQ"]）
+            player = None
+            for pk in self._qq_platform_keys():
+                player = self.player_manager.get_player(user_id, platform=pk)
+                if player:
+                    break
 
             # 如果退群的是普通群，发送通知到管理群
             if is_normal_group and not is_admin_group:
@@ -854,12 +885,14 @@ class BoundSystem(BasicSystem):
                         has_other_platform_accounts = True
                         break
 
-                # 从绑定数据中删除该用户的QQ账户绑定
-                if "QQ" in player.accounts and user_id in player.accounts["QQ"]:
-                    player.accounts["QQ"].remove(user_id)
-                    # 如果QQ账户列表为空，删除该平台
-                    if not player.accounts["QQ"]:
-                        del player.accounts["QQ"]
+                # 从绑定数据中删除该用户的QQ账户绑定（遍历全部候选键：
+                # 自定义 source_name 键 + 历史 "QQ" 键）
+                for pk in self._qq_platform_keys():
+                    if pk in player.accounts and user_id in player.accounts[pk]:
+                        player.accounts[pk].remove(user_id)
+                        # 如果QQ账户列表为空，删除该平台
+                        if not player.accounts[pk]:
+                            del player.accounts[pk]
 
                 # 如果该用户没有其他平台的账户绑定，删除整个 Player（包括所有玩家名）
                 # 参考 bound_system.py 的逻辑：退群时删除整个绑定
@@ -895,10 +928,12 @@ class BoundSystem(BasicSystem):
             )
             return True
 
-        # 获取所有绑定的玩家名
+        # 获取所有绑定的玩家名（排除 QQ 平台：兼容自定义 source_name 与
+        # 历史 "QQ" 键——这里是要「跳过」QQ 平台，所以要排除全部候选键）
+        qq_keys = {k.lower() for k in self._qq_platform_keys()}
         bound_players = []
         for platform, accounts in player.accounts.items():
-            if str(platform).lower() == "qq":
+            if str(platform).lower() in qq_keys:
                 continue
             bound_players.extend(accounts)
 
@@ -1204,9 +1239,13 @@ class BoundSystem(BasicSystem):
         if all_member_ids is None:
             return None
 
-        # 检查每个绑定的QQ账号是否还在群中
+        # 检查每个绑定的QQ账号是否还在群中（遍历全部候选平台键：
+        # 自定义 source_name 键 + 历史 "QQ" 键）
+        qq_keys = self._qq_platform_keys()
         for player in self.player_manager.get_all_players():
-            qq_accounts = player.accounts.get("QQ", [])
+            qq_accounts = []
+            for pk in qq_keys:
+                qq_accounts.extend(player.accounts.get(pk, []))
             for qq_id in qq_accounts:
                 if qq_id not in all_member_ids:
                     # 获取该QQ绑定的所有玩家名（转换为字符串）
@@ -1285,13 +1324,17 @@ class BoundSystem(BasicSystem):
 
             # 从绑定数据中移除该QQ账号
             # 由于新架构中是以玩家为中心，需要找到对应的玩家并移除QQ账号绑定
+            # 遍历全部候选平台键（自定义 source_name + 历史 "QQ"）
             for player in self.player_manager.get_all_players():
-                if "QQ" in player.accounts and qq_id in player.accounts["QQ"]:
-                    player.accounts["QQ"].remove(qq_id)
-                    # 如果QQ账户列表为空，删除该平台
-                    if not player.accounts["QQ"]:
-                        del player.accounts["QQ"]
-
+                removed = False
+                for pk in self._qq_platform_keys():
+                    if pk in player.accounts and qq_id in player.accounts[pk]:
+                        player.accounts[pk].remove(qq_id)
+                        # 如果QQ账户列表为空，删除该平台
+                        if not player.accounts[pk]:
+                            del player.accounts[pk]
+                        removed = True
+                if removed:
                     # 如果该玩家没有任何平台绑定了，删除整个玩家
                     has_any_account = any(
                         accounts for accounts in player.accounts.values() if accounts

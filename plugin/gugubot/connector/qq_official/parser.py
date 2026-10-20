@@ -527,27 +527,6 @@ class QQOfficialParser(BasicParser):
 
         return segments
 
-    @staticmethod
-    def _mentions_to_segments(mentions: Optional[list]) -> list:
-        """官方 mentions（@用户列表，含 username/member_openid）→ at 段。
-
-        .. deprecated::
-            保留作兼容参考；群消息的 @ 已改为 content 原位展开
-            （见 ``_parse_group_message``），不再整体追加到尾部。
-        """
-        result = []
-        for m in mentions or []:
-            if not isinstance(m, dict):
-                continue
-            openid = m.get("id", "") or m.get("member_openid", "") or ""
-            name = (m.get("username", "") or "").strip()
-            if openid or name:
-                result.append({
-                    "type": "at",
-                    "data": {"qq": openid or name, "name": name},
-                })
-        return result
-
     # 附件缓存上限（默认 512MB；0 = 不缓存，-1 = 不清理）
     _CACHE_MAX_BYTES = 512 * 1024 * 1024
     _CACHE_CLEAN_STATE = {"last_check": 0.0}
