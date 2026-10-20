@@ -2,6 +2,7 @@
 """Basic configuration class for loading and saving JSON/YAML files with auto-saving."""
 
 import json
+import os
 from pathlib import Path
 from typing import Any, List, Optional
 
@@ -39,13 +40,22 @@ class BasicConfig(dict):
             self.save()
 
     def save(self) -> None:
-        """Save data to file."""
+        """Save data to file（原子写）。
+
+        先写临时文件再 ``os.replace``：直接 ``open("w")`` 覆盖写的话，
+        进程在写入中途崩溃/断电会留下**半截文件**——玩家绑定、待办、
+        白名单等所有基于 BasicConfig 的持久化数据都会损坏（旧文件已被
+        截断，无法恢复）。``os.replace`` 在同一文件系统上是原子操作，
+        要么旧文件完整保留、要么新文件完整生效。
+        """
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.path.open("w", encoding="UTF-8") as f:
+        tmp_path = self.path.with_suffix(self.path.suffix + ".tmp")
+        with tmp_path.open("w", encoding="UTF-8") as f:
             if self.yaml_format:
                 yaml.dump(dict(self), f)
             else:
                 json.dump(dict(self), f, ensure_ascii=False)
+        os.replace(tmp_path, self.path)
 
     def __setitem__(self, key, value):
         super().__setitem__(key, value)

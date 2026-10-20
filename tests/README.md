@@ -7,7 +7,7 @@ GUGUBot 官方直连改造版的自动化测试（全部独立可跑，无需真
 ```powershell
 $env:PYTHONIOENCODING = "utf-8"
 
-# 一次性跑全部 pytest 用例（当前 166 项，约 30s；含 11 个独立脚本的自动执行）
+# 一次性跑全部 pytest 用例（当前 181 项，约 30s；含 11 个独立脚本的自动执行）
 python -m pytest tests/ -q
 
 # 也可以直接 `python -m pytest`（仓库根有 pytest.ini，testpaths=tests）
@@ -29,6 +29,8 @@ python tests\test_lang_orphans.py       # 语言包孤儿键 / 单边漏译反�
 | test_ws.py | 官方 WS 协议：op:10 Hello → op:2 Identify（QQBot token 前缀、intents=1<<25、shard）→ READY（session_id）→ op:1 心跳 → op:11 ACK（本地起最小 WS 服务器全真握手，**随机端口 + 条件等待**，不依赖固定端口与固定 sleep） |
 | test_ws_close_codes.py | **WS 关闭码语义 + Resume 位点分离（v2.2.10 新增，18 项）**：官方错误码 4006/4007/4008/4009/4900-4913 命中即清空 `session_id`/`last_seq`/`_acked_seq`（否则带废 session 重连 → 服务端再拒 → **永久离线**）；4914（已下架）/4915（封禁）必须停止重连（否则每 3s 刷屏）；4010-4013 停止重连；4014 保持重试（等用户开通能力）；`_on_open` 清 `_last_close_code`（曾遇 4014 的连接后续不再白等 60s）；**Resume 的 seq 用处理完成的 `_acked_seq` 而非收到的 `last_seq`**（官方要求「处理过事件之后记录 s」→ 处理失败的事件不得被跳过，否则永久丢失）；回调异常重抛但不影响 WS 读循环 |
 | test_source_name_custom.py | **自定义 `connector.QQ.source_name` 的全链路适配（v2.2.10 新增，11 项）**：绑定写入 PlayerManager 的平台键是 `source.origin`（= 用户自定义的 source_name，默认 "QQ"），而早期实现多处硬编码 `"QQ"` → 用户改名后**解绑无效、查询查不到、多余绑定检查形同虚设、群名片静默失效**；`echo.py` 硬编码 `is_from("QQ")` → **QQ 私聊被广播到 MC**；两个 QQ 连接器硬编码 `is_from("QQ")` → **转发消息多出 `[来源] 发送者:` 前缀**。现统一走 `_qq_platform_keys()`（当前键 + 兼容历史 "QQ" 键）；另删除 `parser._mentions_to_segments` 死代码（把 openid 原文塞进 at 段，与原位展开的虚拟号不一致 → 同一用户两条绑定） |
+| test_vote_eligible.py | **投票资格名单的两处缺陷（v2.2.10 新增，9 项）**：遍历在线玩家时只要有人**没绑定过**（服务器上的路人）就 `return set()` → **整个资格名单作废**，任何人发起投票被拒、管理员绕过发起后**所有人投票仍被拒**（docstring 明写的是「在线 **且** 已绑定」）；另只查当前 source_name 单键 → 历史 `"QQ"` 键的绑定在投票资格里消失。含 QQ 侧/MC 侧投票者 ID 解析回归 |
+| test_basic_config_atomic.py | **BasicConfig 原子写（v2.2.10 新增，6 项）**：`BasicConfig` 是**所有**持久化系统的基类（玩家绑定/待办/违禁词/关键词/白名单/未绑定检查…），旧 `save()` 直接 `open("w")` 覆盖写 → 写入中途崩溃/断电/磁盘满 → **半截文件且旧数据已被截断，无法恢复**。现改为「先写 .tmp 再 `os.replace`」，同文件系统上原子替换 → 要么旧文件完整、要么新文件完整 |
 | test_native.py | native_chat 分支：走原版 `/tellraw @a <JSON>` 系统消息通道（`ClientboundSystemChatPacket`，不触发聊天验证错误）；`[群名] [QQ转发]名字:` 拼接、引号/反斜杠/换行转义、`show_group_prefix` 只控制可选的 `[群名] ` 前缀（头部无条件保留）、`prefix_color` 上色 |
 | test_e2e.py | 完整数据流：官方 GROUP_MESSAGE_CREATE（带图片附件）→ 群号绑定 → 图片下载缓存（本地 http server）→ BroadcastInfo → MCConnector native_chat → `tellraw @a` 系统消息命令（CICode 公网 url 优先）+ C2C 链路 |
 | test_migration.py | 配置兼容实证：v2.2.4 老配置（token/群号/管理员/自定义群名/模板）迁移后用户值原样保留，新键（connection.type / official / native_chat）自动补全且默认不改变旧行为 |

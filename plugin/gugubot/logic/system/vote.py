@@ -1588,6 +1588,10 @@ class VoteSystem(BasicSystem):
             self.debug_log(f"[VoteSystem Debug] QQ source_name: {qq_source}")
 
             # 获取每个玩家的绑定QQ
+            # 候选平台键：用户自定义的 source_name（当前键）+ 历史 "QQ" 键。
+            # 与 BoundSystem._qq_platform_keys() 同源——早期绑定数据可能
+            # 存在 "QQ" 键下，改名后写入新键，两个键都要查（见 test_source_name_custom.py）。
+            qq_keys = [qq_source] + (["QQ"] if qq_source != "QQ" else [])
             for player_name in online_players:
                 self.debug_log(
                     f"[VoteSystem Debug] 正在查询玩家 '{player_name}' 的绑定信息..."
@@ -1597,17 +1601,20 @@ class VoteSystem(BasicSystem):
                 player = self.player_manager.get_player(player_name)
 
                 if not player:
+                    # 未绑定的在线玩家只是「无投票资格」，绝不能因此作废
+                    # 整个资格名单——旧实现在这里 return set()，任何一个
+                    # 陌生玩家在线都足以让全员（包括已绑定的）失去投票资格，
+                    # 投票发起与投票全部被拒（见 test_vote_eligible.py）。
                     self.debug_log(
-                        f"[VoteSystem Debug] 在PlayerManager中找不到玩家 '{player_name}'"
+                        f"[VoteSystem Debug] 玩家 '{player_name}' 未绑定，跳过（无资格）"
                     )
-                    self.debug_log(
-                        f"[VoteSystem Debug] 找不到玩家 {player_name} 的绑定信息"
-                    )
-                    return set()  # 无法获取玩家信息，返回空集合
+                    continue
 
                 self.debug_log(f"[VoteSystem Debug] 找到玩家对象: {player.name}")
-                # 获取该玩家的QQ账号列表
-                qq_ids = player.accounts.get(qq_source, [])
+                # 获取该玩家的QQ账号列表（遍历候选键）
+                qq_ids = []
+                for pk in qq_keys:
+                    qq_ids.extend(player.accounts.get(pk, []))
                 self.debug_log(
                     f"[VoteSystem Debug] 玩家 '{player_name}' 绑定账号数: {len(qq_ids)}"
                 )
@@ -1656,7 +1663,11 @@ class VoteSystem(BasicSystem):
         player = self.player_manager.get_player(sender_name)
 
         if player:
-            qq_ids = player.accounts.get(qq_source, [])
+            # 候选平台键：当前 source_name + 历史 "QQ" 键（与
+            # _get_eligible_voters 同源）
+            qq_ids = []
+            for pk in ([qq_source] + (["QQ"] if qq_source != "QQ" else [])):
+                qq_ids.extend(player.accounts.get(pk, []))
             self.debug_log(
                 f"[VoteSystem Debug] 玩家 '{sender_name}' 绑定账号数: {len(qq_ids)}"
             )
