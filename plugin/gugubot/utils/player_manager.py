@@ -2,7 +2,7 @@
 # +----------------------------------------------------------------------+
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 from mcdreforged.api.types import PluginServerInterface
 
@@ -160,6 +160,12 @@ class PlayerManager(BasicConfig):
         if name_only:
             return None
 
+        # platform 候选键：QQ 平台的绑定键是用户自定义的 source_name，
+        # 历史数据可能存在默认 "QQ" 键下——只精确匹配 platform 的话，
+        # 用户改名后查不到自己改名前的绑定（系统误判「没绑过」，
+        # 允许重复绑定、绑定上限算错、管理员判定失效）。
+        candidate_platforms = self._platform_candidates(platform)
+
         for player in self._players.values():
             # 2. 通过UUID查找
             if identifier in player.java_name or identifier in player.bedrock_name:
@@ -167,12 +173,38 @@ class PlayerManager(BasicConfig):
 
             # 3. 通过关联账号查找
             for platform_name, account_ids in player.accounts.items():
-                if platform and platform_name != platform:
+                if candidate_platforms and platform_name not in candidate_platforms:
                     continue
                 if identifier in account_ids or str(identifier) in [str(a) for a in account_ids]:
                     return player
 
         return None
+
+    def _platform_candidates(self, platform: str) -> Set[str]:
+        """给定平台键，返回实际可能存放绑定数据的全部候选键。
+
+        QQ 连接器的绑定键是 ``connector.QQ.source_name``（用户可自定义，
+        默认 "QQ"），而配置节名恒为 "QQ"。用户改过 source_name 之后，
+        旧绑定仍留在 "QQ" 键下 → 查询时必须两个键都查，否则会误判
+        「该玩家没有绑定」。其他平台只有单一键。调用方传 "QQ"（节名）
+        还是 source_name，都返回同一组候选键。
+        """
+        if not platform:
+            return set()
+        keys = {str(platform)}
+        try:
+            source_name = self.bound_system.config.get_keys(
+                ["connector", "QQ", "source_name"], "QQ"
+            )
+            if source_name:
+                source_name = str(source_name)
+                # 传入的 platform 是 QQ 的两个候选键之一 → 返回两个键
+                if platform == "QQ" or platform == source_name:
+                    keys.add("QQ")
+                    keys.add(source_name)
+        except Exception:
+            pass
+        return keys
 
     def get_all_players(self) -> List[Player]:
         """获取所有玩家列表"""
@@ -253,7 +285,13 @@ class PlayerManager(BasicConfig):
             admin_ids = permissions.get("admin_ids", [])
             admin_group_ids = permissions.get("admin_group_ids", [])
 
-            if source == config.get_keys(["connector", "QQ", "source_name"], "QQ"):
+            # 注意：source 是 connector 下的**配置节名**（如 "QQ"，代码固定，
+            # 用户改不了），而绑定数据 player.accounts 的平台键是
+            # **source_name**（用户可自定义，默认也是 "QQ"）。两者只在
+            # source_name 未改名时相等——旧实现拿 source 与 source_name 比较，
+            # 改名后恒为 False，QQ 管理员分支整个被跳过 → 管理员判定失效
+            # （改回默认名才恢复）。
+            if source == "QQ":
                 if cache_valid:
                     # 命中缓存：免掉对每个管理群的成员列表请求
                     admin_group_member_ids = cached[1]
@@ -306,7 +344,19 @@ class PlayerManager(BasicConfig):
                         self._admin_member_cache = (now, admin_group_member_ids)
                 admin_group_ids = list(admin_group_member_ids)
 
-            platform_accounts = player.accounts.get(source, [])
+            # 绑定数据的平台键是 source_name（当前配置键），历史数据可能在
+            # "QQ" 键下（用户改名前的旧绑定）——两个候选键都要查，
+            # 与 BoundSystem._qq_platform_keys() 同源。
+            candidate_keys = [source]
+            if source == "QQ":
+                qq_source_name = config.get_keys(
+                    ["connector", "QQ", "source_name"], "QQ"
+                )
+                if qq_source_name and str(qq_source_name) not in candidate_keys:
+                    candidate_keys.insert(0, str(qq_source_name))
+            platform_accounts = []
+            for pk in candidate_keys:
+                platform_accounts.extend(player.accounts.get(pk, []))
             for account_id in platform_accounts:
                 if str(account_id) in [str(i) for i in admin_ids + admin_group_ids]:
                     return True

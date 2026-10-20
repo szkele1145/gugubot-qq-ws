@@ -447,6 +447,21 @@ class InactiveCheckSystem(BasicConfig, BasicSystem):
             self.logger.warning(f"解析基岩版玩家 {player_name} 信息时出错: {e}")
             return None
 
+    def _get_player_qq_accounts(self, player, qq_connector_name: str) -> list:
+        """取玩家全部 QQ 绑定账号（含历史键）。
+
+        候选平台键：当前 source_name + 历史 "QQ" 键（与
+        ``BoundSystem._qq_platform_keys()`` 同源——用户改名前的旧绑定
+        在 "QQ" 键下，只查当前键会**漏检**这些玩家，不活跃检查对它们
+        失效）。
+        """
+        accounts = []
+        for pk in [qq_connector_name] + (
+            ["QQ"] if qq_connector_name != "QQ" else []
+        ):
+            accounts.extend(player.accounts.get(pk, []))
+        return accounts
+
     async def _check_inactive_players(self) -> Dict[int, Dict[str, List[Dict]]]:
         """检查不活跃玩家的核心逻辑
 
@@ -567,7 +582,9 @@ class InactiveCheckSystem(BasicConfig, BasicSystem):
                 # 检查每个玩家
                 for player in all_players:
                     # 只检查有QQ绑定的玩家
-                    qq_accounts = player.accounts.get(QQ_connector_name, [])
+                    qq_accounts = self._get_player_qq_accounts(
+                        player, QQ_connector_name
+                    )
                     if not qq_accounts:
                         continue
 

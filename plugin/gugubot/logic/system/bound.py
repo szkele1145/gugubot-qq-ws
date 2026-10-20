@@ -59,6 +59,20 @@ class BoundSystem(BasicSystem):
             keys.append("QQ")
         return keys
 
+    def _platform_account_count(self, player, source: str) -> int:
+        """统计玩家在某平台上的绑定数量。
+
+        QQ 平台要遍历全部候选键（当前 source_name + 历史 "QQ"）——只查
+        当前键的话，改名前的旧绑定不计入上限 → 可借改名绕过绑定上限。
+        其他平台直接查该平台键。
+        """
+        if source in self._qq_platform_keys():
+            return sum(
+                len(player.accounts.get(pk, []))
+                for pk in self._qq_platform_keys()
+            )
+        return len(player.accounts.get(source, []))
+
     async def process_broadcast_info(self, broadcast_info: BroadcastInfo) -> bool:
         """处理接收到的命令。
 
@@ -299,8 +313,11 @@ class BoundSystem(BasicSystem):
 
         exceeded_platform_bound = exceeded_bedrock_bound = exceeded_java_bound = False
         if player:
-            exceeded_platform_bound = len(
-                player.accounts.get(source, [])
+            # 平台绑定数：QQ 平台要遍历全部候选键（当前 source_name +
+            # 历史 "QQ"），只查当前键的话改名前的旧绑定不计入上限 →
+            # 可借改名绕过绑定上限。
+            exceeded_platform_bound = self._platform_account_count(
+                player, source
             ) >= self.config.get("system", {}).get("bound", {}).get(
                 "max_platform_bound", 1
             )
