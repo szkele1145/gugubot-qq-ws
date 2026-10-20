@@ -140,6 +140,14 @@ class OfficialStatusSystem(BasicSystem):
                 if bound:
                     detail = ", ".join(f"{v}" for v in list(bound.values())[:5])
                     lines.append(f"  群号绑定: {detail}")
+                # 用户直接在配置里填 openid 原文的群：不占虚拟号槽位，
+                # 也不走「待绑定」流程，之前完全不显示——用户配了却看不到
+                # 任何回显，误以为没生效。
+                explicit = getattr(mapper, "_explicit_openids", None) or set()
+                if explicit:
+                    shown = ", ".join(sorted(explicit)[:3])
+                    more = f" 等 {len(explicit)} 个" if len(explicit) > 3 else ""
+                    lines.append(f"  直填 openid 群: {shown}{more}")
                 if pending:
                     lines.append(f"  待绑定配置槽位: {len(pending)} 个")
         except Exception:

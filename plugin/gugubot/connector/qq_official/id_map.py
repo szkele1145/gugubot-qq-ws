@@ -375,9 +375,18 @@ class QQIDMapper:
         return self.user_openid(legacy_id)
 
     def known_legacy_groups(self):
-        """所有已知群号（真实绑定 + 虚拟分配）。"""
+        """所有已知群号（真实绑定 + 虚拟分配 + 用户直填 openid）。
+
+        注意：用户直接填进配置的 openid 原文也算一个已知群——它不占用
+        虚拟号槽位，但确实是插件已知的群目标。不计入会让 ``#状态``
+        显示的群数偏少（用户以为没配上，其实配上了）。
+        """
         with self._lock:
-            return set(self._legacy_group_openid.keys()) | set(self._group_rev.keys())
+            return (
+                set(self._legacy_group_openid.keys())
+                | set(self._group_rev.keys())
+                | set(self._explicit_openids)
+            )
 
     def clear_pending_slots(self) -> None:
         with self._lock:
