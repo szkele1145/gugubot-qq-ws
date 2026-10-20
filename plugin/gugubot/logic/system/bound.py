@@ -59,6 +59,61 @@ class BoundSystem(BasicSystem):
             keys.append("QQ")
         return keys
 
+    def _get_player_qq_accounts(self, player) -> list:
+        """取玩家在 QQ 平台上的全部绑定账号（含历史键）。
+
+        平台键要遍历全部候选键（当前 source_name + 历史 "QQ"）——只查
+        当前键的话，用户改名前的旧绑定查不到 → **绑定者自己无法解绑**
+        （只提示"无绑定"，非管理员被卡住）。
+        """
+        accounts = []
+        for pk in self._qq_platform_keys():
+            accounts.extend(player.accounts.get(pk, []))
+        return accounts
+
+    def _can_unbind(self, player, sender_id: str, is_admin: bool) -> bool:
+        """判断发起解绑的人是否有权限解绑该玩家。
+
+        管理员一律可以；普通用户必须是**绑定者本人**——判定要看全部候选
+        平台键（当前 source_name + 历史 "QQ"），只查当前键的话，用户
+        改名前的旧绑定查不到 → **绑定者自己无法解绑**（只提示"无绑定"，
+        非管理员被卡住）。
+        """
+        if is_admin:
+            return True
+        return str(sender_id) in [
+            str(a) for a in self._get_player_qq_accounts(player)
+        ]
+
+    def _has_other_platform_accounts(self, player) -> bool:
+        """判断玩家是否还绑定了 QQ 以外平台的账号。
+
+        绑定键是用户自定义的 source_name（默认 "QQ"），硬编码 ``"QQ"``
+        会在改名后把 QQ 绑定误判成"其他平台的绑定"→ 退群清理时残留
+        **僵尸绑定**（玩家名留着、QQ 号没了）。
+        """
+        qq_keys = self._qq_platform_keys()
+        for platform, accounts in player.accounts.items():
+            if platform not in qq_keys and accounts:
+                return True
+        return False
+
+    def _is_account_bound(self, player, source: str, account_id: str) -> bool:
+        """判断玩家是否已在该平台绑定过指定账号。
+
+        QQ 平台要遍历全部候选键（当前 source_name + 历史 "QQ"）——只查
+        当前键的话，用户改名前绑过的账号会被判成"没绑过"→ 重复绑定
+        （同一 QQ 号在两个键下各存一份，解绑时只能删掉一半）。
+        """
+        if source in self._qq_platform_keys():
+            keys = self._qq_platform_keys()
+        else:
+            keys = [source]
+        for pk in keys:
+            if str(account_id) in [str(a) for a in player.accounts.get(pk, [])]:
+                return True
+        return False
+
     def _platform_account_count(self, player, source: str) -> int:
         """统计玩家在某平台上的绑定数量。
 
@@ -457,7 +512,7 @@ class BoundSystem(BasicSystem):
                     )
                     return success
 
-                elif player_name not in existing_player.accounts.get(platform, []):
+                elif not self._is_account_bound(existing_player, platform, target_id):
                     existing_player.add_account(platform, target_id)
                     self.player_manager.save()
                     success = _bound_whitelist(
@@ -598,8 +653,8 @@ class BoundSystem(BasicSystem):
 
         is_admin = broadcast_info.is_admin
         # 检查是否是绑定玩家
-        if not is_admin and broadcast_info.sender_id not in player.accounts.get(
-            broadcast_info.source.origin, []
+        if not self._can_unbind(
+            player, broadcast_info.sender_id, is_admin
         ):
             await self.reply(
                 broadcast_info, [MessageBuilder.text(self.get_tr("no_bindings"))]
@@ -896,11 +951,12 @@ class BoundSystem(BasicSystem):
                     self._remove_from_whitelist(all_player_names)
 
                 # 检查该用户是否还有其他平台的账户绑定
-                has_other_platform_accounts = False
-                for platform, accounts in player.accounts.items():
-                    if platform != "QQ" and accounts:
-                        has_other_platform_accounts = True
-                        break
+                # 注意：绑定键是用户自定义的 source_name（默认 "QQ"），
+                # 硬编码 "QQ" 会在改名后把 QQ 绑定误判成"其他平台的绑定"
+                # → 残留僵尸绑定（玩家名留着、QQ 号没了）
+                has_other_platform_accounts = self._has_other_platform_accounts(
+                    player
+                )
 
                 # 从绑定数据中删除该用户的QQ账户绑定（遍历全部候选键：
                 # 自定义 source_name 键 + 历史 "QQ" 键）

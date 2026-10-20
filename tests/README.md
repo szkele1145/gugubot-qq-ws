@@ -7,7 +7,7 @@ GUGUBot 官方直连改造版的自动化测试（全部独立可跑，无需真
 ```powershell
 $env:PYTHONIOENCODING = "utf-8"
 
-# 一次性跑全部 pytest 用例（当前 199 项，约 30s；含 11 个独立脚本的自动执行）
+# 一次性跑全部 pytest 用例（当前 212 项，约 30s；含 11 个独立脚本的自动执行）
 python -m pytest tests/ -q
 
 # 也可以直接 `python -m pytest`（仓库根有 pytest.ini，testpaths=tests）
@@ -33,6 +33,7 @@ python tests\test_lang_orphans.py       # 语言包孤儿键 / 单边漏译反�
 | test_basic_config_atomic.py | **BasicConfig 原子写（v2.2.10 新增，6 项）**：`BasicConfig` 是**所有**持久化系统的基类（玩家绑定/待办/违禁词/关键词/白名单/未绑定检查…），旧 `save()` 直接 `open("w")` 覆盖写 → 写入中途崩溃/断电/磁盘满 → **半截文件且旧数据已被截断，无法恢复**。现改为「先写 .tmp 再 `os.replace`」，同文件系统上原子替换 → 要么旧文件完整、要么新文件完整 |
 | test_player_manager_source_name.py | **PlayerManager 对自定义 source_name 的适配（v2.2.10 新增，11 项）**：`player.accounts` 的平台键是 `connector.QQ.source_name`（用户可自定义，默认 "QQ"）。① `get_player(..., platform=)` 按键**精确匹配** → 改名前的旧绑定（历史 "QQ" 键）查不到 → 系统误判「没绑过」→ **允许重复绑定**；② `is_admin()` 遍历 `connectors.items()`，其键是**配置节名**（恒为 "QQ"），旧实现却拿它与 source_name 比较 → 改名后恒为 False → **QQ 管理员分支整个被跳过、管理员判定失效**。现 QQ 平台的查询/判定都遍历「source_name 当前键 + 历史 "QQ" 键」，非 QQ 平台语义不变 |
 | test_bound_limit_source_name.py | **绑定上限与不活跃检查的单键查询（v2.2.10 新增，7 项）**：`bound.py` 绑定上限只查当前键 → 旧绑定不计入 → **可借改名绕过绑定上限**；`inactive_check.py` 只查当前键 → 历史键下的玩家**被漏检**（不活跃却不被清理/通知）。现两处都遍历「当前 source_name + 历史 "QQ" 键」 |
+| test_bound_unbind_source_name.py | **解绑权限/重复绑定/退群清理的单键查询（v2.2.10 新增，13 项）**：① 解绑权限检查只查当前键 → 改名前的旧绑定查不到 → **绑定者自己无法解绑**（非管理员被卡住）；② 重复绑定判重旧代码拿 **MC 玩家名**去比 **QQ 账号列表**（不同命名空间，几乎恒为 True）且只查当前键 → 改名前绑过的 QQ 号被**再绑一次**（两个键各存一份，解绑只能删一半）；③ 退群清理判断"其他平台绑定"时硬编码 `platform != "QQ"` → 改名后 QQ 绑定被误判成"其他平台"→ 残留**僵尸绑定**（玩家名留着、QQ 号没了）。现抽出 `_get_player_qq_accounts` / `_can_unbind` / `_is_account_bound` / `_has_other_platform_accounts` 四个方法 |
 | test_native.py | native_chat 分支：走原版 `/tellraw @a <JSON>` 系统消息通道（`ClientboundSystemChatPacket`，不触发聊天验证错误）；`[群名] [QQ转发]名字:` 拼接、引号/反斜杠/换行转义、`show_group_prefix` 只控制可选的 `[群名] ` 前缀（头部无条件保留）、`prefix_color` 上色 |
 | test_e2e.py | 完整数据流：官方 GROUP_MESSAGE_CREATE（带图片附件）→ 群号绑定 → 图片下载缓存（本地 http server）→ BroadcastInfo → MCConnector native_chat → `tellraw @a` 系统消息命令（CICode 公网 url 优先）+ C2C 链路 |
 | test_migration.py | 配置兼容实证：v2.2.4 老配置（token/群号/管理员/自定义群名/模板）迁移后用户值原样保留，新键（connection.type / official / native_chat）自动补全且默认不改变旧行为 |
