@@ -87,6 +87,14 @@ class BoundNoticeSystem(BasicSystem):
                 ]
                 if source_openid in admin_openids:
                     return False
+            else:
+                # OneBot 链路没有 id_mapper：source_id 本身就是真实群号，
+                # 直接按字符串比对即可。
+                # （若在这里静默跳过，管理群里的未绑定玩家就会收到
+                #   「请先绑定」提醒——而设计意图是管理群不发这类提醒。）
+                admin_group_strs = {str(gid) for gid in admin_group_ids if gid}
+                if str(broadcast_info.source_id) in admin_group_strs:
+                    return False
 
         # 检查玩家是否在玩家管理器中
         player = self.bound_system.player_manager.get_player(
