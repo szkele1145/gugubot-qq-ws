@@ -161,12 +161,25 @@ class BasicSystem:
             target=broadcast_info.target
         )
 
+    def _is_routable_source_id(self, source_id) -> bool:
+        """source_id 能否直接当作回复的 target key。
+
+        历史上只认纯数字（真实 QQ 号 / QQ 群号 / 官方模式的虚拟号）。
+        但 QQ 官方直连支持在配置里**直接填写 openid 原文**（32 位十六进制），
+        此时 source_id 是非数字串——按旧逻辑会回退到 origin_source（也就是
+        "QQ" 这个连接器名），#命令 的回复就发不出去。
+
+        因此放宽为：非空 → 可路由。MC 玩家名不是数字但同样的判定已沿用
+        至今（回退到 origin 对 MC 侧本就等价），放宽不会破坏既有行为。
+        """
+        return bool(source_id)
+
     async def reply(self, broadcast_info: BroadcastInfo, message: List[dict]) -> None:
         # 构造基础 target - 使用原始来源作为 target key
         origin_source = broadcast_info.source.origin
         target_source = (
             broadcast_info.source_id
-            if broadcast_info.source_id and broadcast_info.source_id.isdigit()
+            if self._is_routable_source_id(broadcast_info.source_id)
             else origin_source
         )
         target = {target_source: broadcast_info.event_sub_type}
@@ -209,7 +222,8 @@ class BasicSystem:
         reply_target = broadcast_info.source.current
         target_source = (
             broadcast_info.source_id
-            if broadcast_info.source.origin and str(broadcast_info.source_id).isdigit()
+            if broadcast_info.source.origin
+            and self._is_routable_source_id(broadcast_info.source_id)
             else reply_target
         )
         respond = ProcessedInfo(

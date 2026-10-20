@@ -323,7 +323,14 @@ class QQIDMapper:
             )
 
     def to_legacy_group(self, group_openid: str) -> str:
-        """group_openid → 下游使用的群号（优先真实群号 / 直填 openid）。"""
+        """group_openid → 下游使用的群号（优先真实群号 / 直填 openid）。
+
+        整个解析在**同一把锁**内完成（RLock 可重入）：如果先放锁再调
+        ``group_legacy_id()`` 分配虚拟号，两个线程并发处理同一个新群时，
+        一个可能刚把该 openid 绑定到真实群号，另一个却仍返回虚拟号——
+        同一个群在两次调用中得到不同 legacy 号，下游会当成两个群，
+        消息目标错乱。
+        """
         with self._lock:
             legacy = self._openid_group_legacy.get(group_openid)
             if legacy:
@@ -332,7 +339,8 @@ class QQIDMapper:
                 # 用户直接把 openid 填进配置：下游就用这个串做标识，
                 # 不再分配虚拟号（否则显示号与配置里的值对不上）
                 return group_openid
-        return self.group_legacy_id(group_openid)
+            # 持锁调用（RLock 重入），中间没有释放窗口
+            return self.group_legacy_id(group_openid)
 
     def group_legacy_display(self, group_openid: str) -> str:
         """该群当前显示号（真实群号 / 虚拟号 / 用户直填的 openid），未知返回空。"""
