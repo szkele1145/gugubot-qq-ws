@@ -47,6 +47,9 @@ class QQIDMapper:
         self._legacy_group_openid: Dict[str, str] = {}
         # group_openid -> 用户配置的真实群号（用于显示）
         self._openid_group_legacy: Dict[str, str] = {}
+        # 用户在配置里**直接填了 openid 原文**的群（自映射，不参与虚拟号
+        # 分配）。单独存放以免污染 _group_map/_group_rev 的虚拟号语义。
+        self._explicit_openids: set = set()
 
         self._next_user = _BASE_USER
         self._next_group = _BASE_GROUP
@@ -85,6 +88,7 @@ class QQIDMapper:
                 self._group_rev = {v: k for k, v in self._group_map.items()}
                 self._legacy_group_openid = dict(data.get("legacy_group_openid", {}))
                 self._openid_group_legacy = dict(data.get("openid_group_legacy", {}))
+                self._explicit_openids = set(data.get("explicit_openids", []))
                 self._next_user = int(data.get("next_user", _BASE_USER))
                 self._next_group = int(data.get("next_group", _BASE_GROUP))
                 # 防御：文件缺 next_user/next_group 字段（旧版文件或手工
@@ -147,6 +151,7 @@ class QQIDMapper:
                 "group_map": self._group_map,
                 "legacy_group_openid": self._legacy_group_openid,
                 "openid_group_legacy": self._openid_group_legacy,
+                "explicit_openids": sorted(self._explicit_openids),
                 "next_user": self._next_user,
                 "next_group": self._next_group,
             }
@@ -244,11 +249,20 @@ class QQIDMapper:
                 if gid.isdigit():
                     order.append(gid)
                 else:
-                    # openid 原文：直接作为「自己映射自己」登记，发消息直接可用
-                    self._group_map.setdefault(gid, gid)
-                    self._group_rev.setdefault(gid, gid)
-            # 保持已绑定关系不变，仅补充新槽位
-            bound = set(self._legacy_group_openid.values())
+                    # openid 原文：登记到「用户直接填了 openid」的专用表，
+                    # 发送时原样使用即可。
+                    # 不能写进 _group_map/_group_rev——那两个表的语义是
+                    # 「虚拟号 ↔ openid」，混入 openid 原串会让
+                    # is_legacy_group()/known_legacy_groups() 把十六进制串
+                    # 也当群号，下游遍历群列表时会冒出不可读的串。
+                    self._explicit_openids.add(gid)
+            # 保持已绑定关系不变，仅补充新槽位。
+            # 注意：_legacy_group_openid 是 {真实群号: openid}，判重必须用
+            # **keys**（已占用的真实群号）。早期这里误用 values()（openid
+            # 集合）去和真实群号比较——两者永不相交，于是已绑定的群号每次
+            # 都被重新放回待绑定队列：插件重启后第一个开口的新群会抢走
+            # 别的群已占用的群号并覆盖绑定，旧群从此收不到消息且无任何提示。
+            bound = set(self._legacy_group_openid.keys())
             pending = [g for g in order if g not in bound]
             self._pending_legacy_groups = pending
             self._legacy_group_order = order
@@ -271,6 +285,10 @@ class QQIDMapper:
         with self._lock:
             if group_openid in self._openid_group_legacy:
                 # 已绑定真实群号
+                return None
+            if group_openid in self._explicit_openids:
+                # 用户直接填了 openid：它本身就是配置里写的标识，
+                # 无需也不应再占用「真实群号槽位」
                 return None
             pending = self._pending_legacy_groups or []
             if pending:
@@ -296,34 +314,47 @@ class QQIDMapper:
     # ------------------------------------------------------------------ #
 
     def known_group_openids(self):
-        """所有已知群 openid（真实绑定 + 虚拟分配）。"""
+        """所有已知群 openid（真实绑定 + 虚拟分配 + 用户直填）。"""
         with self._lock:
-            return set(self._openid_group_legacy.keys()) | set(self._group_map.keys())
+            return (
+                set(self._openid_group_legacy.keys())
+                | set(self._group_map.keys())
+                | set(self._explicit_openids)
+            )
 
     def to_legacy_group(self, group_openid: str) -> str:
-        """group_openid → 下游使用的群号（优先真实群号）。"""
+        """group_openid → 下游使用的群号（优先真实群号 / 直填 openid）。"""
         with self._lock:
             legacy = self._openid_group_legacy.get(group_openid)
             if legacy:
                 return legacy
+            if group_openid in self._explicit_openids:
+                # 用户直接把 openid 填进配置：下游就用这个串做标识，
+                # 不再分配虚拟号（否则显示号与配置里的值对不上）
+                return group_openid
         return self.group_legacy_id(group_openid)
 
     def group_legacy_display(self, group_openid: str) -> str:
-        """该群当前显示号（真实群号或虚拟号），未知返回空。"""
+        """该群当前显示号（真实群号 / 虚拟号 / 用户直填的 openid），未知返回空。"""
         with self._lock:
             legacy = self._openid_group_legacy.get(group_openid)
             if legacy:
                 return legacy
+            if group_openid in self._explicit_openids:
+                return group_openid
             return self._group_map.get(group_openid, "")
 
     def to_official_group(self, legacy_id: str) -> str:
-        """下游群号（真实/虚拟）→ group_openid。"""
+        """下游群号（真实/虚拟/直填 openid）→ group_openid。"""
         legacy = str(legacy_id)
         with self._lock:
             if legacy in self._legacy_group_openid:
                 return self._legacy_group_openid[legacy]
             if legacy in self._group_rev:
                 return self._group_rev[legacy]
+            if legacy in self._explicit_openids:
+                # 用户直接在配置里填了 openid 原文
+                return legacy
         # 兜底：把原始值当 openid 用（用户可能直接填了 openid）
         return legacy
 
