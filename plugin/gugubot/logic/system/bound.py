@@ -945,10 +945,32 @@ class BoundSystem(BasicSystem):
                 ["connector", "QQ", "permissions", "admin_group_ids"], []
             )
 
-            is_normal_group = str(group_id) in [str(gid) for gid in group_ids if gid]
-            is_admin_group = str(group_id) in [
-                str(gid) for gid in admin_group_ids if gid
-            ]
+            # 官方直连模式下，raw["group_id"] 是**虚拟群号**（12 位
+            # 200000xxx），而配置里填的是**真实群号** → 直接字符串比较
+            # 永不相等 → is_normal_group 恒 False → 退群通知永远不发。
+            # 与 echo.py / bound_notice.py 同一修法：有 id_mapper 时把
+            # 双方统一翻成 group_openid 再比对；OneBot 链路没有
+            # id_mapper，group_id 本身就是真实群号，直接按字符串比。
+            mapper = None
+            qq_connector = self.system_manager.connector_manager.get_connector(
+                self._qq_source_name()
+            )
+            if qq_connector:
+                mapper = getattr(qq_connector, "id_mapper", None)
+
+            def _as_openid(gid: str) -> str:
+                if mapper is None:
+                    return str(gid)
+                try:
+                    return str(mapper.to_official_group(str(gid)))
+                except Exception:
+                    return str(gid)
+
+            event_group_key = _as_openid(group_id)
+            is_normal_group = event_group_key in {_as_openid(g) for g in group_ids if g}
+            is_admin_group = event_group_key in {
+                _as_openid(g) for g in admin_group_ids if g
+            }
 
             # 获取该用户的绑定信息（兼容自定义 source_name：可能在
             # accounts["我的QQ"]，也可能在历史键 accounts["QQ"]）

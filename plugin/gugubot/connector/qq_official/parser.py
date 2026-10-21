@@ -228,6 +228,11 @@ class QQOfficialParser(BasicParser):
                 return self._parse_friend_add(data)
             elif event_name in ("GROUP_ADD_ROBOT", "GROUP_DEL_ROBOT", "GROUP_ADD_ROM", "GROUP_DEL_ROM"):
                 return self._parse_group_bot_change(data, event_name)
+            elif event_name in ("GROUP_MEMBER_ADD", "GROUP_MEMBER_REMOVE"):
+                # 群成员增减（与 GROUP_ADD_ROBOT 同属 1<<25 intent 位，
+                # 官方已在下发，旧版解析器没有分支 → 静默丢弃 →
+                # 官方模式下退群清理与退群通知完全失效）
+                return self._parse_group_member_change(data, event_name)
             return None
         except Exception as e:
             if self.logger:
@@ -481,6 +486,74 @@ class QQOfficialParser(BasicParser):
     # ------------------------------------------------------------------ #
     # 其他事件
     # ------------------------------------------------------------------ #
+
+    def _parse_group_member_change(self, data: dict, event_name: str) -> Optional[BroadcastInfo]:
+        """群成员增加/减少（官方 ``GROUP_MEMBER_ADD`` / ``GROUP_MEMBER_REMOVE``）。
+
+        官方事件与 OneBot 的 ``group_increase`` / ``group_decrease`` 语义
+        对齐：``op_member_openid`` 是**变动成员**的 openid。
+
+        为什么必须转成 OneBot 形态：下游 ``bound.py`` 的退群处理
+        （``_handle_quit_member``）只认 ``event_sub_type ==
+        "group_decrease"``，且从 ``raw`` 里读 ``user_id`` / ``group_id``
+        两个**数字 ID**。官方事件里根本没有 ``group_id``（只有
+        ``group_openid``），直接下发的话：
+        - ``raw.get("group_id", "")`` 恒为空 → 处理函数首行就 return；
+        - 即使补上群号，用户 ID 也必须是**虚拟用户号**（下游拿它去
+          比对 ``player.accounts``），不能是 openid 原文。
+
+        因此这里把官方事件翻译成下游期待的形状：
+        - ``event_sub_type``：``group_decrease`` / ``group_increase``
+        - ``raw``：补上 ``user_id``（虚拟用户号）与 ``group_id``
+          （群显示号：真实绑定号 / 虚拟号 / 用户直填的 openid）
+        - ``source_id``：群显示号；``sender_id``：虚拟用户号
+        """
+        group_openid = data.get("group_openid", "")
+        if not group_openid:
+            return None
+        member_openid = data.get("op_member_openid", "")
+        if not member_openid:
+            return None
+
+        id_mapper = self.connector.id_mapper
+        legacy_group = id_mapper.to_legacy_group(group_openid)
+        legacy_user = id_mapper.to_legacy_user(member_openid)
+        # 翻不出（未知 openid / 映射表异常）→ 产出空 source_id 的事件
+        # 毫无意义，下游拿空群号去比对配置必然失配 → 直接丢弃
+        if not legacy_group or not legacy_user:
+            return None
+
+        is_remove = event_name == "GROUP_MEMBER_REMOVE"
+        # 官方「群成员减少」可能来自机器人被踢（robot leaves）——那属于
+        # group_bot_change 的语义，不要混进退群清理。
+        op_type = data.get("op_type", "")
+        if is_remove and str(op_type).upper() in ("BOT", "ROBOT"):
+            return None
+
+        # raw 里补齐下游期待的字段（保留官方原始字段便于排查）
+        raw = dict(data)
+        raw["user_id"] = legacy_user
+        raw["group_id"] = legacy_group
+        raw["self_id"] = legacy_user
+
+        action = "退出" if is_remove else "加入"
+        return BroadcastInfo(
+            event_type="notice",
+            event_sub_type="group_decrease" if is_remove else "group_increase",
+            message=[
+                {
+                    "type": "text",
+                    "data": {"text": f"用户 {legacy_user} {action}群 {legacy_group}"},
+                }
+            ],
+            raw=raw,
+            server=self.server,
+            logger=self.logger,
+            _source=Source(self.connector.source),
+            source_id=str(legacy_group),
+            sender="",
+            sender_id=str(legacy_user),
+        )
 
     def _parse_friend_add(self, data: dict) -> Optional[BroadcastInfo]:
         openid = data.get("openid", "")
