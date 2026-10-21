@@ -84,8 +84,6 @@ class QQIDMapper:
             with self._lock:
                 self._user_map = dict(data.get("user_map", {}))
                 self._group_map = dict(data.get("group_map", {}))
-                self._user_rev = {v: k for k, v in self._user_map.items()}
-                self._group_rev = {v: k for k, v in self._group_map.items()}
                 self._legacy_group_openid = dict(data.get("legacy_group_openid", {}))
                 self._openid_group_legacy = dict(data.get("openid_group_legacy", {}))
                 self._explicit_openids = set(data.get("explicit_openids", []))
@@ -107,9 +105,71 @@ class QQIDMapper:
                 )
                 if self._next_group <= max_group:
                     self._next_group = max_group + 1
+                # 自愈：旧版计数器 bug 可能已经落下「多个 openid 共用一个
+                # 虚拟号」的脏数据。反向表若直接用字典推导式建（后写覆盖
+                # 先写），冲突时只保留最后一个 → 其余 openid 的虚拟号会指到
+                # **别人**头上，下游按虚拟号发消息就是发错人。
+                # 必须在建反向表**之前**先修掉冲突。
+                self._repair_duplicate_ids_locked()
+                # 修完冲突再建反向表（此时已保证一一对应）
+                self._user_rev = {v: k for k, v in self._user_map.items()}
+                self._group_rev = {v: k for k, v in self._group_map.items()}
         except Exception as e:
             if self._logger:
                 self._logger.warning(f"[QQ官方] 读取 ID 映射文件失败: {e}")
+
+    def _repair_duplicate_ids_locked(self) -> None:
+        """修复「多个 openid 共用同一虚拟号」的脏数据（须持锁调用）。
+
+        成因：旧版 ``_load`` 在文件缺 ``next_user``/``next_group`` 字段时
+        会让计数器回落到起始号，而映射表里早已占用了这些号 → 后续新
+        openid 被分到**重复的虚拟号**。反向表（虚拟号 → openid）若用字典
+        推导式建，冲突时只保留最后一个 → 其余 openid 的虚拟号指向**别人**
+        ——下游按虚拟号发消息就是**发错人**，且没有任何报错。
+
+        修复策略（保守，不动已有合法映射）：
+        - 按 ``_user_map`` 的插入顺序遍历，**先到者保留原号**；
+        - 后到的冲突项重新分配一个从未用过的新号（从 ``_next_user`` 取）；
+        - 群号同理。
+
+        修复后本方法会把脏数据落盘一次（``_save`` 的去抖机制会合并写）。
+        """
+        dirty = False
+
+        seen: dict = {}
+        for openid, legacy in self._user_map.items():
+            if legacy in seen:
+                new_legacy = str(self._next_user)
+                self._next_user += 1
+                self._user_map[openid] = new_legacy
+                dirty = True
+                if self._logger:
+                    self._logger.warning(
+                        f"[QQ官方] ID 映射自愈：用户 {openid} 的虚拟号与 "
+                        f"{seen[legacy]} 冲突（同为 {legacy}），已重新分配为 {new_legacy}"
+                    )
+            else:
+                seen[legacy] = openid
+
+        seen_g: dict = {}
+        for openid, legacy in self._group_map.items():
+            if legacy in seen_g:
+                new_legacy = str(self._next_group)
+                self._next_group += 1
+                self._group_map[openid] = new_legacy
+                dirty = True
+                if self._logger:
+                    self._logger.warning(
+                        f"[QQ官方] ID 映射自愈：群 {openid} 的虚拟号与 "
+                        f"{seen_g[legacy]} 冲突（同为 {legacy}），已重新分配为 {new_legacy}"
+                    )
+            else:
+                seen_g[legacy] = openid
+
+        if dirty:
+            # 修复结果必须落盘，否则下次启动又要重跑一遍（且期间消息仍可能
+            # 发错人）。这里直接写，不走 0.2s 去抖——加载期只有一次。
+            self._write_file()
 
     def _save(self) -> None:
         """合并写：标记脏 + 0.2s 去抖统一落盘。
