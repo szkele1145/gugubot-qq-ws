@@ -207,14 +207,18 @@ class BridgeConnector(BasicConnector):
                 daemon=True,
             ).start()
 
-    def _run_on_mcdr_loop(self, coro_factory, timeout: float = 10.0):
-        """在 MCDR 的事件循环上执行一个协程，并**同步**取回结果。
+    def _submit_to_mcdr_loop(self, coro_factory) -> None:
+        """把协程提交到 MCDR 的事件循环上执行，**不等待结果**。
+
+        这是消息处理路径的**首选**入口：收包线程只负责投递，立刻返回
+        → 不会因为插件逻辑里的网络请求（``is_admin`` 要拉群成员列表）
+        而阻塞收包、导致桥接消息堆积。
 
         为什么不能用 ``asyncio.run()``
         ----------------------------
         本连接器的消息回调跑在 **websocket 库的收包线程**里（不是
-        asyncio 线程）。此前的实现用 ``asyncio.run(...)`` 在该线程里
-        **临时造一个事件循环**来跑插件逻辑，有两个致命问题：
+        asyncio 线程）。此前用 ``asyncio.run(...)` 在该线程里**临时造
+        一个事件循环**来跑插件逻辑，有两个致命问题：
 
         1. ``asyncio.run()`` 在协程返回后**关闭**这个临时循环，关闭时
            会**强制取消**其中所有未完成的后台任务。本插件里
@@ -235,36 +239,56 @@ class BridgeConnector(BasicConnector):
         ``submit()`` → ``event_loop.create_task(coro)``），因为循环
         长驻，``create_task`` 派生的子任务**不会被取消**。
 
+        **传参必须是「协程对象」或「async def 函数」**
+        ----------------------------------------
+        MCDR 的 ``schedule_task`` 按下面的顺序判定（见
+        ``mcdreforged/plugin/si/server_interface.py``）：
+
+            if inspect.iscoroutine(callable_):           # 协程对象
+                → async executor ✓
+            elif inspect.iscoroutinefunction(callable_):  # async def 函数
+                → async executor ✓
+            elif callable(callable_):                   # 普通可调用对象
+                → **同步 executor** ✗
+
+        传 ``lambda: self._process_bridge_message(...)`` 这种**普通
+        lambda** 会落到第三条分支 → 被丢进**同步** executor → 同步
+        executor 调它得到一个**协程对象**却**从不 await** → 协程体从未
+        执行（还会报 ``RuntimeWarning: coroutine ... was never
+        awaited``）。所以这里统一传**协程对象**（``iscoroutine`` 为
+        True）。
+
+        协程对象本身**不会**提前绑定到错误的循环：asyncio 的协程对象
+        本身不绑定循环，绑定发生在 ``loop.create_task(coro)`` 时 ——
+        而那正是 MCDR async executor 提交时做的事。
+
         Parameters
         ----------
         coro_factory : Callable[[], Awaitable]
-            返回协程的**工厂**（传协程对象会提前绑定到错误的循环）。
-        timeout : float
-            等待结果的超时秒数。
-
-        Returns
-        -------
-        Any
-            协程的返回值；超时或出错时返回 ``None``。
+            返回协程的**工厂**。
         """
         try:
-            future = self.server.schedule_task(coro_factory)
+            coro = coro_factory()
         except Exception as e:
+            self.logger.error(
+                f"{self.log_prefix} 创建桥接处理协程失败: {e}\n{traceback.format_exc()}"
+            )
+            return
+
+        try:
+            self.server.schedule_task(coro)
+        except Exception as e:
+            # 提交失败 → 这个协程对象没人会 await，必须显式 close，
+            # 否则报 "coroutine ... was never awaited" 且协程帧不会释放。
+            close = getattr(coro, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:
+                    pass
             self.logger.error(
                 f"{self.log_prefix} 调度到 MCDR 事件循环失败: {e}\n{traceback.format_exc()}"
             )
-            return None
-
-        if future is None:
-            return None
-
-        try:
-            return future.result(timeout=timeout)
-        except Exception as e:
-            self.logger.error(
-                f"{self.log_prefix} MCDR 事件循环任务执行失败: {e}"
-            )
-            return None
 
     def _handle_server_message(self, client: Dict, _: Any, message: str) -> None:
         """Process a message received on the server side and relay it."""
@@ -275,24 +299,53 @@ class BridgeConnector(BasicConnector):
             # （否则其它子服的游戏里会看到带有命令前缀的原始消息）
             skip_relay = self._is_qq_broadcast_command(message_data)
 
+            # 整条处理链（算 is_admin → 转发给其它子服 → 本服处理）都放到
+            # MCDR 事件循环里跑，**收包线程只负责投递、不等待**。
+            #
+            # 为什么不阻塞收包线程：is_admin 内部要
+            # `await qq_connector.bot.get_group_member_list(...)`（网络请求，
+            # 可能好几秒）→ 若在收包线程里同步等结果，这段时间该连接**收
+            # 不到任何消息** → 桥接延迟堆积、严重时像掉线。
+            self._submit_to_mcdr_loop(
+                lambda: self._handle_server_message_async(
+                    client, message_data, skip_relay
+                )
+            )
+
+        except Exception as e:
+            self.logger.error(f"{self.log_prefix} 消息处理失败: {e}")
+
+    async def _handle_server_message_async(
+        self, client: Dict, message_data: Dict, skip_relay: bool
+    ) -> None:
+        """在 MCDR 事件循环上完成服务端的桥接消息处理。
+
+        Parameters
+        ----------
+        client : Dict
+            发送方客户端描述。
+        message_data : Dict
+            已解析的消息体。
+        skip_relay : bool
+            是否跳过「转发给其它子服」。
+        """
+        try:
             # Relay to other connected clients
             if not skip_relay and self.ws_server and self.ws_server.get_client_count() > 1:
                 message_data["bridge_source"] = client.get("address", ["unknown", 0])[0]
                 sender_id = message_data.get("sender_id", None)
-                message_data["is_admin"] = self._run_on_mcdr_loop(
-                    lambda: self._is_admin(sender_id)
-                )
+                message_data["is_admin"] = await self._is_admin(sender_id)
 
                 for other_client in self.ws_server.get_clients():
                     if other_client["id"] != client["id"]:
                         self.ws_server.send_message(other_client, message_data)
 
-            self._run_on_mcdr_loop(
-                lambda: self._process_bridge_message(message_data)
-            )
+            await self._process_bridge_message(message_data)
 
         except Exception as e:
-            self.logger.error(f"{self.log_prefix} 消息处理失败: {e}")
+            self.logger.error(
+                f"{self.log_prefix} 处理桥接消息失败: {e}\n{traceback.format_exc()}"
+            )
 
     def _is_qq_broadcast_command(self, message_data: Dict) -> bool:
         """判断桥接消息是否是子服发来的 !!qq 跨平台广播命令。
@@ -332,7 +385,7 @@ class BridgeConnector(BasicConnector):
             ):
                 return
 
-            self._run_on_mcdr_loop(
+            self._submit_to_mcdr_loop(
                 lambda: self._process_bridge_message(message_data)
             )
 

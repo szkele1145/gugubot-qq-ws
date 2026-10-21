@@ -4,8 +4,8 @@
 背景
 ----
 ``connector/bridge_connector.py`` 的消息回调跑在 **websocket 库的收包
-线程**里。此前用 ``asyncio.run(...)`` 在该线程里**临时造一个事件循环**
-来跑插件逻辑。
+线程**里（不是 asyncio 线程）。此前用 ``asyncio.run(...)`` 在该线程里
+**临时造一个事件循环**来跑插件逻辑。
 
 ``asyncio.run()`` 在协程返回后会**关闭**这个临时循环，关闭时**强制
 取消**其中所有未完成的后台任务。本插件里：
@@ -24,23 +24,37 @@
 ``submit()`` → ``event_loop.create_task(coro)``），循环长驻 → 子任务
 不会被取消。
 
-测试策略
---------
-1. **静态检查**：桥接连接器源码里不得再出现 ``asyncio.run``；
-2. **行为检查**：``_run_on_mcdr_loop`` 必须把协程提交给
-   ``server.schedule_task``，并且**同步**取回结果；
-3. **机制检查**：在**常驻**事件循环上创建的 fire-and-forget 任务能真正
-   跑完（对照：在 ``asyncio.run`` 的临时循环上会被取消）—— 用它证明
-   修复方向是对的。
+两个必须守住的约束
+----------------
+1. **必须传「协程对象」或「async def 函数」给 ``schedule_task``**。
+
+   MCDR 的判定顺序（见 ``mcdreforged/plugin/si/server_interface.py``）：
+
+       if inspect.iscoroutine(callable_):           # 协程对象
+           → async executor ✓
+       elif inspect.iscoroutinefunction(callable_):  # async def 函数
+           → async executor ✓
+       elif callable(callable_):                   # 普通可调用对象
+           → **同步 executor** ✗
+
+   传普通 ``lambda`` 会落到第三条分支 → 被丢进**同步** executor → 同步
+   executor 调它得到一个**协程对象**却**从不 await** → 协程体从未执行
+   （还会报 ``RuntimeWarning: coroutine ... was never awaited``）。
+
+2. **收包线程不得阻塞等待结果**。
+
+   ``is_admin`` 内部要 ``await qq_connector.bot.get_group_member_list()``
+   （网络请求，可能好几秒）→ 若在收包线程里同步等结果，这段时间该连接
+   **收不到任何消息** → 桥接消息堆积、严重时像掉线。
 """
 import asyncio
+import inspect
 import sys
 import types
 import pathlib
 import importlib.abc
 import importlib.machinery
 import threading
-import time
 
 import pytest
 
@@ -91,7 +105,6 @@ def test_bridge_connector_has_no_asyncio_run():
 
     hits = []
     for node in ast.walk(tree):
-        # 只看真正的调用节点（文档字符串里的文字不算）
         if (
             isinstance(node, ast.Call)
             and isinstance(node.func, ast.Attribute)
@@ -119,7 +132,7 @@ def test_bridge_connector_does_not_import_asyncio():
                 assert alias.name != "asyncio", "asyncio 已不再使用，应移除 import"
 
 
-# ==================================================== 2. 行为检查
+# ==================================================== 2. 传参形态
 def _mk_connector(schedule_task):
     conn = bc.BridgeConnector.__new__(bc.BridgeConnector)
     conn.logger = types.SimpleNamespace(
@@ -136,66 +149,122 @@ def _mk_connector(schedule_task):
     return conn
 
 
-def test_run_on_mcdr_loop_uses_schedule_task():
-    """_run_on_mcdr_loop 必须把协程交给 server.schedule_task。"""
+def _mcdr_branch(callable_):
+    """复刻 MCDR ``schedule_task`` 的分支判定。
+
+    返回 ``"async"`` 表示会走 async executor（协程会被真正 await），
+    ``"sync"`` 表示会走同步 executor（协程对象永远不会被 await）。
+    """
+    if inspect.iscoroutine(callable_):
+        return "async"
+    if inspect.iscoroutinefunction(callable_):
+        return "async"
+    return "sync"
+
+
+def test_submit_passes_coroutine_object_not_lambda():
+    """关键回归：传给 schedule_task 的必须是**协程对象**。
+
+    传普通 lambda → MCDR 丢进同步 executor → 得到的协程对象从不被
+    await → 协程体从未执行（比原来的 asyncio.run 更糟：原来至少跑过）。
+    """
     submitted = []
 
-    def schedule_task(coro_factory):
-        submitted.append(coro_factory)
+    def schedule_task(obj):
+        submitted.append(obj)
+        return None
+
+    conn = _mk_connector(schedule_task)
+    conn._submit_to_mcdr_loop(lambda: _dummy_coro(1))
+
+    assert len(submitted) == 1
+    obj = submitted[0]
+    assert inspect.iscoroutine(obj), (
+        "传给 schedule_task 的必须是协程对象（iscoroutine=True），"
+        f"实际拿到 {type(obj).__name__}"
+    )
+    assert _mcdr_branch(obj) == "async", (
+        "传参落到了 MCDR 的同步 executor 分支 → 协程永远不会被 await"
+    )
+    # 收尾：避免 "coroutine was never awaited" 警告
+    obj.close()
+
+
+def test_submit_does_not_block_caller():
+    """收包线程不得阻塞等待结果。
+
+    is_admin 要拉群成员列表（网络请求，可能好几秒）→ 若在这里同步等，
+    该连接在这段时间收不到任何消息。
+    """
+    import time
+
+    def schedule_task(obj):
+        # 模拟一个「迟迟不返回」的 MCDR future
         fut = concurrent_future()
-        fut.set_result("ok")
+        obj.close()
         return fut
 
     conn = _mk_connector(schedule_task)
-    result = conn._run_on_mcdr_loop(lambda: _dummy_coro("hello"))
+    start = time.monotonic()
+    conn._submit_to_mcdr_loop(lambda: _dummy_coro(1))
+    elapsed = time.monotonic() - start
 
-    assert len(submitted) == 1, "协程没有被提交给 server.schedule_task"
-    assert result == "ok"
-
-
-def test_run_on_mcdr_loop_returns_coroutine_result():
-    """_run_on_mcdr_loop 必须同步取回协程的返回值。"""
-    def schedule_task(coro_factory):
-        # 真实地跑一遍协程并把结果塞进 future
-        fut = concurrent_future()
-
-        def _runner():
-            try:
-                loop = asyncio.new_event_loop()
-                try:
-                    fut.set_result(loop.run_until_complete(coro_factory()))
-                finally:
-                    loop.close()
-            except Exception as e:  # pragma: no cover
-                fut.set_exception(e)
-
-        t = threading.Thread(target=_runner)
-        t.start()
-        t.join(timeout=5)
-        return fut
-
-    conn = _mk_connector(schedule_task)
-    assert conn._run_on_mcdr_loop(lambda: _dummy_coro(42)) == 42
+    assert elapsed < 0.5, (
+        f"_submit_to_mcdr_loop 阻塞了 {elapsed:.2f}s —— "
+        "收包线程会被拖住，桥接消息堆积"
+    )
 
 
-def test_run_on_mcdr_loop_handles_schedule_failure():
+def test_submit_handles_schedule_failure():
     """schedule_task 抛异常时不得让整个消息处理崩掉。"""
     def schedule_task(_):
         raise RuntimeError("MCDR 未运行")
 
     conn = _mk_connector(schedule_task)
-    assert conn._run_on_mcdr_loop(lambda: _dummy_coro(1)) is None
+    conn._submit_to_mcdr_loop(lambda: _dummy_coro(1))  # 不应抛异常
 
 
-def test_run_on_mcdr_loop_handles_timeout():
-    """协程卡住超时 → 返回 None，不无限期阻塞收包线程。"""
-    def schedule_task(coro_factory):
-        fut = concurrent_future()
-        # 故意不设结果 → 永远 pending
-        return fut
+def test_submit_closes_coro_when_scheduling_fails():
+    """提交失败时必须显式 close 协程对象。
+
+    否则会报 ``RuntimeWarning: coroutine ... was never awaited``，
+    协程帧也不会释放。用 ``warnings.catch_warnings`` 捕获这个警告来
+    断言（协程对象的 ``close`` 属性是只读的，没法打桩）。
+    """
+    import warnings
+
+    def schedule_task(_):
+        raise RuntimeError("MCDR 未运行")
 
     conn = _mk_connector(schedule_task)
-    assert conn._run_on_mcdr_loop(lambda: _dummy_coro(1), timeout=0.1) is None
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        conn._submit_to_mcdr_loop(lambda: _dummy_coro(1))
+        # 触发 GC → 未 close 的协程会在这里报 never-awaited
+        import gc
+        gc.collect()
+
+    never_awaited = [
+        w for w in caught
+        if "never awaited" in str(w.message)
+    ]
+    assert not never_awaited, (
+        "提交失败后协程未被 close，会触发 never-awaited 警告："
+        f"{[str(w.message) for w in never_awaited]}"
+    )
+
+
+def test_submit_handles_coro_factory_raising():
+    """协程工厂本身抛异常时也不得外溢。"""
+    def schedule_task(_):
+        return None
+
+    def bad_factory():
+        raise ValueError("boom")
+
+    conn = _mk_connector(schedule_task)
+    conn._submit_to_mcdr_loop(bad_factory)  # 不应抛异常
 
 
 async def _dummy_coro(value):
@@ -224,7 +293,6 @@ def test_fire_and_forget_task_survives_on_persistent_loop():
     loop = asyncio.new_event_loop()
     try:
         loop.create_task(monitor())
-        # 模拟 MCDR 的 task_awaiter：让循环跑一会儿
         loop.call_later(0.5, loop.stop)
         loop.run_forever()
     finally:
@@ -250,7 +318,7 @@ def test_fire_and_forget_task_survives_on_persistent_loop():
 def test_bridge_message_flow_does_not_cancel_background_tasks():
     """端到端：桥接消息处理链路上，后台任务不会被取消。
 
-    模拟 MCDR 的常驻循环 + 桥接连接器的 ``_run_on_mcdr_loop`` →
+    模拟 MCDR 的常驻循环 + 桥接连接器的 ``_submit_to_mcdr_loop`` →
     内部 fire-and-forget 任务（此处用投票监控的形态）必须活下来。
     """
     state = {}
@@ -265,13 +333,12 @@ def test_bridge_message_flow_does_not_cancel_background_tasks():
 
     loop = asyncio.new_event_loop()
     try:
-        def schedule_task(coro_factory):
+        def schedule_task(obj):
             fut = concurrent_future()
-            task_holder = {}
 
             def _runner():
                 try:
-                    task_holder["t"] = loop.create_task(coro_factory())
+                    loop.create_task(obj)
                     fut.set_result(None)
                 except Exception as e:  # pragma: no cover
                     fut.set_exception(e)
@@ -282,8 +349,8 @@ def test_bridge_message_flow_does_not_cancel_background_tasks():
         conn = _mk_connector(schedule_task)
         # 从**另一个线程**调用（模拟 websocket 收包线程）
         t = threading.Thread(
-            target=lambda: conn._run_on_mcdr_loop(
-                lambda: process_bridge_message(), timeout=5
+            target=lambda: conn._submit_to_mcdr_loop(
+                lambda: process_bridge_message()
             )
         )
         t.start()
@@ -297,6 +364,58 @@ def test_bridge_message_flow_does_not_cancel_background_tasks():
 
     assert state.get("vote_monitor_done") is True, (
         "桥接链路上的 fire-and-forget 任务被取消了（投票监控会静默失效）"
+    )
+
+
+def test_server_message_handles_is_admin_without_blocking():
+    """服务端消息处理：is_admin 的网络请求不得拖住收包线程。
+
+    模拟一个「慢」的 is_admin（内部要拉群成员列表），断言
+    ``_handle_server_message`` 立即返回。
+    """
+    import time
+
+    state = {}
+
+    async def slow_is_admin(_sender_id):
+        await asyncio.sleep(0.5)
+        state["is_admin_done"] = True
+        return True
+
+    def schedule_task(obj):
+        fut = concurrent_future()
+
+        def _runner():
+            try:
+                loop.create_task(obj)
+                fut.set_result(None)
+            except Exception as e:  # pragma: no cover
+                fut.set_exception(e)
+
+        loop = asyncio.new_event_loop()
+        try:
+            loop.call_soon_threadsafe(_runner)
+            # 让循环跑起来
+            threading.Thread(target=loop.run_forever, daemon=True).start()
+            time.sleep(0.05)
+        finally:
+            pass
+        return fut
+
+    conn = _mk_connector(schedule_task)
+    conn._is_admin = slow_is_admin
+    conn.ws_server = None
+    conn.config = types.SimpleNamespace(
+        get_keys=lambda *a, **k: False
+    )
+
+    start = time.monotonic()
+    conn._handle_server_message({"id": 1}, None, '{"processed_message": []}')
+    elapsed = time.monotonic() - start
+
+    assert elapsed < 0.3, (
+        f"_handle_server_message 阻塞了 {elapsed:.2f}s —— "
+        "收包线程被 is_admin 的网络请求拖住"
     )
 
 
