@@ -74,6 +74,16 @@ class WebSocketServer:
         self.server: Optional[WebsocketServer] = None
         self.server_thread: Optional[threading.Thread] = None
         self.clients: List[Dict] = []
+        # clients 会被两个不同线程访问：websocket 库的收包线程（连接 /
+        # 断开 → append / remove）与插件主线程（stop / broadcast /
+        # get_clients）。没有锁时：
+        #   - `if client in self.clients: self.clients.remove(client)` 是
+        #     「先查后删」两步操作，另一线程在两步之间 append/remove 会让
+        #     remove 删掉**错误的元素**（list.remove 按值删首个匹配）；
+        #   - `self.clients.copy()` 撞上并发 append 会抛 RuntimeError，
+        #     或**漏掉刚连上的客户端** → stop() 不断开它 → 服务器关不掉、
+        #     端口一直占用（插件 reload 时报「端口已被占用」）。
+        self._clients_lock = threading.Lock()
         self._is_running = False
 
         # Callbacks
@@ -91,8 +101,9 @@ class WebSocketServer:
         server : Any
             Server instance.
         """
-        self.clients.append(client)
-        self.logger.info(f"新客户端连接: {client['address']}")
+        with self._clients_lock:
+            self.clients.append(client)
+        self.logger.info(f"新客户端连接: {client.get('address', 'unknown')}")
 
         if self._on_client_connect_callback:
             try:
@@ -110,8 +121,9 @@ class WebSocketServer:
         server : Any
             Server instance.
         """
-        if client in self.clients:
-            self.clients.remove(client)
+        with self._clients_lock:
+            if client in self.clients:
+                self.clients.remove(client)
         client_address = client.get("address") if client else "unknown"
         self.logger.info(f"客户端断开: {client_address}")
 
@@ -204,11 +216,17 @@ class WebSocketServer:
 
         try:
             if self.server:
-                client_count = len(self.clients)
+                # 取快照再逐个断开：拿快照时加锁，避免与收包线程的
+                # append/remove 撞车（copy 撞上并发修改会抛 RuntimeError，
+                # 且会漏掉刚连上的客户端 → 它不会被断开 → 端口占用）。
+                with self._clients_lock:
+                    client_count = len(self.clients)
+                    clients_snapshot = list(self.clients)
+
                 if client_count > 0:
                     self.logger.info("正在断开 %s 个客户端...", client_count)
 
-                    for client in self.clients.copy():
+                    for client in clients_snapshot:
                         try:
                             self.server.send_message(
                                 client, json.dumps({"type": "server_shutdown"})
@@ -239,7 +257,8 @@ class WebSocketServer:
                 self.server_thread.join(timeout=timeout)
 
             self._is_running = False
-            self.clients.clear()
+            with self._clients_lock:
+                self.clients.clear()
 
         except Exception as e:
             error_msg = str(e) + "\n" + traceback.format_exc()
@@ -270,7 +289,13 @@ class WebSocketServer:
                 message = json.dumps(message, ensure_ascii=False)
 
             self.server.send_message(client, message)
-            self.logger.debug("向 %s 发送消息: %s", client['address'], message)
+            # 注意：日志取地址必须用 .get 兜底 —— client 缺 'address' 键时
+            # `client['address']` 抛 KeyError，会被下面的 except 吞掉并
+            # 返回 False，而此时**消息其实已经发出去了** → 调用方误判失败
+            # 而重试 → 同一条消息重复发送。
+            self.logger.debug(
+                "向 %s 发送消息: %s", client.get("address", "unknown"), message
+            )
             return True
 
         except Exception as e:
@@ -300,7 +325,8 @@ class WebSocketServer:
                 message = json.dumps(message, ensure_ascii=False)
 
             self.server.send_message_to_all(message)
-            count = len(self.clients)
+            with self._clients_lock:
+                count = len(self.clients)
             self.logger.debug("向 %s 个客户端广播消息: %s", count, message)
             return count
 
@@ -327,7 +353,8 @@ class WebSocketServer:
         List[Dict]
             List of client information dictionaries.
         """
-        return self.clients.copy()
+        with self._clients_lock:
+            return list(self.clients)
 
     def get_client_count(self) -> int:
         """Get the number of connected clients.
@@ -337,4 +364,5 @@ class WebSocketServer:
         int
             Number of connected clients.
         """
-        return len(self.clients)
+        with self._clients_lock:
+            return len(self.clients)
