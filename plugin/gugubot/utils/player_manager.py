@@ -292,7 +292,27 @@ class PlayerManager(BasicConfig):
             # 改名后恒为 False，QQ 管理员分支整个被跳过 → 管理员判定失效
             # （改回默认名才恢复）。
             if source == "QQ":
-                if cache_valid:
+                # 连接器注册名 = source_name（用户可自定义，默认 "QQ"），
+                # 不是配置节名 "QQ"——硬编码会在改名后取到 None →
+                # None.bot 抛 AttributeError（且 try 从下一行才开始，
+                # 这一行不在保护范围内）→ 管理员判定整个抛异常。
+                qq_source_name = (
+                    self.bound_system.config.get_keys(
+                        ["connector", "QQ", "source_name"], "QQ"
+                    )
+                    or "QQ"
+                )
+                qq_connector = self.bound_system.system_manager.connector_manager.get_connector(
+                    qq_source_name
+                )
+                if qq_connector is None:
+                    # 连接器缺失（改名后注册名对不上 / 未启动）→ 跳过「管理群
+                    # 成员」这一路判定，但**不能**直接 return False：配置里
+                    # 显式写的 admin_ids 仍应生效，否则管理员权限静默失效。
+                    admin_group_ids = []
+                    admin_group_member_ids = set()
+                    member_list_supported = True
+                elif cache_valid:
                     # 命中缓存：免掉对每个管理群的成员列表请求
                     admin_group_member_ids = cached[1]
                     member_list_supported = True
@@ -303,9 +323,7 @@ class PlayerManager(BasicConfig):
                         if not admin_group_id:
                             continue
                         try:
-                            admin_group_members = await self.bound_system.system_manager.connector_manager.get_connector(
-                                "QQ"
-                            ).bot.get_group_member_list(
+                            admin_group_members = await qq_connector.bot.get_group_member_list(
                                 group_id=admin_group_id
                             )
 

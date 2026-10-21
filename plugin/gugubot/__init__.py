@@ -250,10 +250,21 @@ async def on_load(server: PluginServerInterface, _) -> None:
 
     # 为未绑定检查系统设置 QQ 连接器（仅在主服务器）
     if is_main_server:
-        qq_connector = connector_manager.get_connector("QQ")
+        # 连接器注册名 = connector.QQ.source_name（用户可自定义，默认
+        # "QQ"）——硬编码 "QQ" 会在用户改名后取到 None → 未绑定检查与
+        # 不活跃检查系统**完全不工作**（后续访问 .bot 抛 AttributeError）。
+        qq_source = gugubot_config.get_keys(
+            ["connector", "QQ", "source_name"], "QQ"
+        ) or "QQ"
+        qq_connector = connector_manager.get_connector(qq_source)
         if qq_connector:
             unbound_check_system.set_qq_connector(qq_connector)
             inactive_check_system.set_qq_connector(qq_connector)
+        else:
+            server.logger.warning(
+                f"[GUGUBot] 未找到 QQ 连接器（source_name={qq_source}），"
+                f"未绑定检查与不活跃检查系统将不工作"
+            )
 
     # 检查插件版本
     server.schedule_task(check_plugin_version(server))

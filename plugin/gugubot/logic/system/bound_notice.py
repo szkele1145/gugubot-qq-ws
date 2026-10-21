@@ -74,7 +74,14 @@ class BoundNoticeSystem(BasicSystem):
             admin_group_ids = self.config.get_keys(
                 ["connector", "QQ", "permissions", "admin_group_ids"], []
             )
-            qq_connector = self.system_manager.connector_manager.get_connector("QQ")
+            # 连接器的注册名（connector.source）就是 source_name，不是配置
+            # 节名 "QQ"——用户改过 source_name 后硬编码 "QQ" 会取到 None →
+            # 落进下面的 OneBot 兜底分支 → 拿虚拟群号和真实群号配置比对 →
+            # 永远不相等 → 管理群里的未绑定玩家照样收到「请先绑定」提醒
+            # （设计意图是管理群不发这类提醒）。
+            qq_connector = self.system_manager.connector_manager.get_connector(
+                qq_source
+            )
             # getattr 兜底：OneBot 链路连接器无 id_mapper 属性
             id_mapper = getattr(qq_connector, "id_mapper", None) if qq_connector else None
             if id_mapper:

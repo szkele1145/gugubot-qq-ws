@@ -59,6 +59,25 @@ class BoundSystem(BasicSystem):
             keys.append("QQ")
         return keys
 
+    def _qq_source_name(self) -> str:
+        """QQ 连接器的**注册名**（= ``connector.QQ.source_name``）。
+
+        与 :meth:`_qq_platform_keys` 的区别：那个返回的是「绑定数据里可能
+        用到的平台键」（当前 + 历史 "QQ"）；这个返回的是**当前生效的连接器
+        注册名**——``ConnectorManager.get_connector()`` 是按
+        ``connector.source`` 匹配的，而 ``connector.source`` 就是
+        ``source_name``（默认 "QQ"，可自定义）。
+
+        早期实现多处写成 ``get_connector("QQ")``：用户改过 source_name 后
+        取到 None → 后续 ``qq_connector.bot`` 抛 AttributeError 被外层
+        except 吞掉 → **绑定其实已写盘，用户却看到"绑定失败"**；另一些
+        地方取到 None 后静默 return → 功能（群名片 / 退群通知 / 成员归属
+        检查 / 未绑定检查）静默失效。
+        """
+        return (
+            self.config.get_keys(["connector", "QQ", "source_name"], "QQ") or "QQ"
+        )
+
     def _get_player_qq_accounts(self, player) -> list:
         """取玩家在 QQ 平台上的全部绑定账号（含历史键）。
 
@@ -485,7 +504,7 @@ class BoundSystem(BasicSystem):
                     ["connector", "QQ", "others", "change_group_card"], True
                 ):
                     qq_connector = self.system_manager.connector_manager.get_connector(
-                        "QQ"
+                        self._qq_source_name()
                     )
                     # 官方直连连接器带 id_mapper（虚拟号→openid）；OneBot 链路
                     # 没有该属性，此处必须 getattr 兜底，否则 OneBot 模式下
@@ -770,7 +789,11 @@ class BoundSystem(BasicSystem):
 
         # 获取QQ连接器
         try:
-            qq_connector = self.system_manager.connector_manager.get_connector("QQ")
+            # 连接器注册名 = source_name（用户可自定义），不能硬编码 "QQ"
+            # ——改名后取到 None → 成员归属类检查永远不可用
+            qq_connector = self.system_manager.connector_manager.get_connector(
+                self._qq_source_name()
+            )
             if not qq_connector or not qq_connector.bot:
                 # 连接器未就绪：查询结果不可信，不能当空集
                 self.logger.info(
@@ -865,8 +888,11 @@ class BoundSystem(BasicSystem):
 
             notification_msg = "\n".join(notification_parts)
 
-            # 获取QQ连接器
-            qq_connector = self.system_manager.connector_manager.get_connector("QQ")
+            # 获取QQ连接器（注册名 = source_name，不能硬编码 "QQ"——改名后
+            # 取到 None → 退群通知静默不发送）
+            qq_connector = self.system_manager.connector_manager.get_connector(
+                self._qq_source_name()
+            )
             if not qq_connector or not qq_connector.bot:
                 return
 
