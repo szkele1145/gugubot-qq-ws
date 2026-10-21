@@ -119,6 +119,34 @@ class QQOfficialBot:
     def __init__(self, connector: "QQOfficialConnector") -> None:
         self._c = connector
         self.self_id = None  # 官方无真实 QQ 号；READY 后填开放平台 bot id
+        # 兼容 OneBot Bot 的请求跟踪字段（BasicSystem 某些路径会读
+        # function_return）。**必须是实例属性**：类级可变默认值会被
+        # 所有实例共享 —— 任何一次写入都变成跨实例污染，且官方模式
+        # 没有 OneBot 那套 `_cleanup_pending_requests()` 定期清理 →
+        # 内存只增不减。
+        self.function_return: dict = {}
+        self.pending_requests: dict = {}
+
+    def __getattr__(self, name):
+        """兜底：为「绕过 __init__ 构造的实例」惰性建立跟踪 dict。
+
+        官方模式的测试与嵌入式用法常用 ``__new__`` 绕过 ``__init__``
+        构造（那样就拿不到 ``__init__`` 里建的两个 dict）。若改用
+        「类级空 dict 兜底」，那些实例会**共享同一份** → 写入即污染
+        （与类级可变默认值同样的问题，只是换了个入口）。
+
+        故这里用 ``__getattr__``：访问时**建一个属于本实例的新 dict**
+        并缓存进实例 ``__dict__``（同一实例多次访问拿到同一个对象）。
+        只处理这两个名字，其它属性照常抛 AttributeError——绝不拿
+        ``__getattr__`` 掩盖真实的属性缺失。
+        """
+        if name in ("function_return", "pending_requests"):
+            value: dict = {}
+            object.__setattr__(self, name, value)
+            return value
+        raise AttributeError(
+            f"{type(self).__name__!r} object has no attribute {name!r}"
+        )
 
     # ------------------------------------------------------------------ #
     # 发消息
@@ -330,6 +358,10 @@ class QQOfficialBot:
             "data": {"app_name": "gugubot-official", "app_version": self._plugin_version()},
         }
 
+    # 兼容 OneBot Bot 的请求跟踪字段由 __init__ 建实例属性；
+    # 绕过 __init__ 构造的实例由 __getattr__ 惰性建**本实例专属**的
+    # dict（不用类级空 dict 兜底——那会被所有实例共享）。
+
     def _plugin_version(self) -> str:
         """插件真实版本号（优先 MCDR 元数据，其次打包内 json，最后 unknown）。
 
@@ -353,10 +385,6 @@ class QQOfficialBot:
         except Exception:
             pass
         return "unknown"
-
-    # 兼容 OneBot Bot 的请求跟踪字段（BasicSystem 某些路径会读 function_return）
-    function_return: dict = {}
-    pending_requests: dict = {}
 
 
 class QQOfficialConnector(BasicConnector):
