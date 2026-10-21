@@ -637,10 +637,28 @@ class QQOfficialConnector(BasicConnector):
             )
         try:
             task = {"_event_name": event_type, "_data": data, "_event_id": event_id}
-            # process_message 是协程函数：必须包装成可调用对象再交给
-            # schedule_task，否则直接调用会传入一个协程对象（不可被调度），
-            # 抛 TypeError 被外层 try/except 吞掉，导致全部 WS 事件丢失。
-            self.server.schedule_task(lambda: self.parser.process_message(task))
+            # 必须把**协程对象**交给 schedule_task，不能用 lambda 包一层。
+            #
+            # MCDR 的 schedule_task 按下面的顺序分派（见 MCDR 源码
+            # mcdreforged/plugin/si/server_interface.py，协程对象支持自
+            # v2.14.0）：
+            #
+            #     if inspect.iscoroutine(callable_):            # 协程对象
+            #         → async_task_executor.submit(coro)  ✓
+            #     elif inspect.iscoroutinefunction(callable_):  # async def 函数
+            #         → async_task_executor.submit(coro()) ✓
+            #     elif callable(callable_):                    # 普通可调用对象
+            #         → **task_executor**（同步线程池）✗
+            #
+            # 传 lambda 属于第三种 → 被丢进**同步** executor → 同步
+            # executor 调它得到一个**协程对象**却**从不 await** → 协程体
+            # 从未执行（还会报 "RuntimeWarning: coroutine ... was never
+            # awaited"）→ **官方模式收到的每一个 WS 事件都被静默丢弃**。
+            #
+            # 传协程对象则走 async_task_executor → 协程在 MCDR 常驻的
+            # 事件循环上被真正执行（与 key_word.py / inactive_check.py /
+            # unbound_check.py 的 schedule_task 用法一致）。
+            self.server.schedule_task(self.parser.process_message(task))
         except Exception as e:
             self.logger.error(
                 f"{self.log_prefix} 消息处理失败: {e}\n{traceback.format_exc()}"
