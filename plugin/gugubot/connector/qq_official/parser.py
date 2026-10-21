@@ -31,6 +31,7 @@ import mimetypes
 import os
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Iterable, Optional
 
@@ -94,11 +95,55 @@ class QQOfficialParser(BasicParser):
     _no_slot_warned: set = set()
     _not_listened_warned: set = set()
 
+    # 附件下载专用线程池的并发上限。
+    # 刻意压得很低：下载是「可有可无」的（失败只影响图片渲染），
+    # 而发送链路（REST）必须随时有线程可用。默认线程池约 32 个线程，
+    # 被几十个慢速附件占满时，发送请求会全部排队 → 机器人卡死。
+    _DOWNLOAD_WORKERS = 4
+    # 单个附件的**总**下载时长上限（秒）。
+    # requests 的 timeout 是「每次读操作」的超时，不是总时长——一个
+    # 每 30 秒吐 1 字节的慢速源可以永远读下去，把线程占死。
+    _ATTACHMENT_TOTAL_TIMEOUT = 60
+
     def __init__(self, connector) -> None:
         super().__init__(connector)
         # 每个实例独立的去重集合（不与类级默认共享）
         self._no_slot_warned = set()
         self._not_listened_warned = set()
+        # 附件下载专用线程池（与 asyncio 默认线程池隔离）。
+        #
+        # 为什么必须独立：asyncio.to_thread 用的是**全局默认**线程池
+        # （约 32 个线程），而发送链路（REST 请求）也用它。群里一次连发
+        # 几十个大附件，每个下载最坏耗满 20s 超时 → 下载线程把默认池占满
+        # → **所有发送请求排队等待** → 机器人彻底卡死（发不出任何消息）。
+        # 独立的有界池把下载的并发压在低位（默认 4），剩下的线程留给发送。
+        #
+        # **惰性创建**：用 ``__new__`` 绕过 ``__init__`` 构造的实例
+        # （测试与嵌入式用法很常见）也要能正常下载附件，故不在 __init__
+        # 里建池——否则这些实例会**永远没有下载池** → 附件静默不缓存
+        # （图片段只剩 url）。建池推迟到 ``_get_download_pool()``。
+        self._download_pool = None
+
+    def _get_download_pool(self):
+        """取（或惰性创建）附件下载专用线程池。"""
+        pool = getattr(self, "_download_pool", None)
+        if pool is None:
+            pool = ThreadPoolExecutor(
+                max_workers=self._DOWNLOAD_WORKERS,
+                thread_name_prefix="qq-dl",
+            )
+            self._download_pool = pool
+        return pool
+
+    def shutdown(self) -> None:
+        """释放下载线程池（插件卸载时调用）。"""
+        pool = getattr(self, "_download_pool", None)
+        if pool is not None:
+            try:
+                pool.shutdown(wait=False, cancel_futures=True)
+            except Exception:
+                pass
+            self._download_pool = None
 
     def _warned_sets(self) -> tuple:
         """返回本实例的两个提示去重集合（惰性创建，兼容绕过 __init__ 的构造）。"""
@@ -550,10 +595,21 @@ class QQOfficialParser(BasicParser):
             if summary:
                 file_data["summary"] = summary
 
-            # 下载附件到本地缓存（ChatImage 用本地文件最稳；线程池执行）
-            local = await asyncio.to_thread(
-                self._cache_attachment, url, filename, content_type
-            )
+            # 下载附件到本地缓存（ChatImage 用本地文件最稳）。
+            # **专用下载线程池**：与 asyncio 默认线程池隔离——默认池
+            # 也承载发送链路（REST 请求），被慢速附件占满会让机器人
+            # 彻底发不出消息；专用池把下载并发压在低位且可丢任务。
+            local = None
+            try:
+                pool = self._get_download_pool()
+                loop = asyncio.get_running_loop()
+                local = await loop.run_in_executor(
+                    pool, self._cache_attachment,
+                    url, filename, content_type,
+                )
+            except RuntimeError:
+                # 下载线程池已关闭（插件卸载中）：不再缓存，只用 url
+                local = None
             if local:
                 file_data["file"] = local
 
@@ -633,8 +689,13 @@ class QQOfficialParser(BasicParser):
 
         使用 ``stream=True`` + 分块写入 + Content-Length 预检：
         既不把整个文件读进内存，也能在超限时提前放弃。
+
+        另外有**总时长上限**：``requests`` 的 ``timeout`` 是「每次读操作」
+        的超时，不是总时长——一个每 30 秒吐 1 字节的慢速源可以永远读
+        下去，把下载线程占死（线程池满了就卡住其它消息处理）。
         """
         tmp = local.with_suffix(local.suffix + ".part")
+        deadline = time.monotonic() + self._ATTACHMENT_TOTAL_TIMEOUT
         try:
             with requests.get(url, timeout=20, stream=True) as resp:
                 resp.raise_for_status()
@@ -656,6 +717,13 @@ class QQOfficialParser(BasicParser):
                                 self.logger.debug(
                                     f"[QQ官方] 附件下载超过上限 "
                                     f"（{self._ATTACHMENT_MAX_BYTES}B），中止并放弃缓存"
+                                )
+                            return False
+                        if time.monotonic() > deadline:
+                            if self.logger:
+                                self.logger.debug(
+                                    f"[QQ官方] 附件下载超过总时长上限 "
+                                    f"（{self._ATTACHMENT_TOTAL_TIMEOUT}s），中止并放弃缓存"
                                 )
                             return False
                         fh.write(chunk)

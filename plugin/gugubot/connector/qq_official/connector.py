@@ -532,6 +532,13 @@ class QQOfficialConnector(BasicConnector):
         try:
             if self.ws_client:
                 self.ws_client.disconnect()
+            # 关闭解析器的附件下载线程池（不等待，避免阻塞卸载）
+            try:
+                parser = getattr(self, "parser", None)
+                if parser is not None and hasattr(parser, "shutdown"):
+                    parser.shutdown()
+            except Exception:
+                pass
             # 确保映射表落盘
             try:
                 self.id_mapper.flush()
