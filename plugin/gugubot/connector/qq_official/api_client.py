@@ -232,6 +232,27 @@ class QQOfficialClient:
                 payload["event_id"] = event_id
         return self._request("POST", f"/v2/groups/{group_openid}/messages", payload)
 
+    @staticmethod
+    def _extract_file_info(data) -> Any:
+        """从 /files 上传的返回体里取出 file_info。
+
+        官方返回体形如 ``{"file_info": "..."}``；历史上也见过「整个返回体
+        就是 file_info 包装」的形态。两条发送路径（群聊 / 单聊）必须用
+        **同一套**判定——否则同一份返回在群聊能发、单聊报「上传返回异常」。
+
+        值为空串 / 空 dict 一律视为无效：否则会拼出 ``media.file_info``
+        为空的富媒体消息，官方侧报错且用户端什么都收不到。
+        """
+        if not isinstance(data, dict):
+            return None
+        raw = data.get("file_info")
+        if raw:
+            return raw
+        if set(data.keys()) < {"file_info"}:
+            # data 里没有 file_info 这个键 → 把整个 data 当 file_info
+            return data or None
+        return None
+
     def send_group_media_message(
         self,
         group_openid: str,
@@ -250,12 +271,7 @@ class QQOfficialClient:
         多图连发场景调用方应传 False，把宝贵的 msg_id seq 留给文本。
         """
         info = self.upload_group_media(group_openid, file_type, url, srv=srv)
-        # 上传返回体形如 {"file_info": "...", ...}；兼容直接给 file_info 的返回
-        file_info = None
-        if isinstance(info, dict):
-            file_info = info.get("file_info") or (
-                info if set(info.keys()) <= {"file_info"} else None
-            )
+        file_info = self._extract_file_info(info)
         if not file_info:
             raise QQOfficialAPIError(500, 500, f"富媒体上传返回异常: {info!r}")
         media = {"file_info": file_info}
@@ -344,7 +360,8 @@ class QQOfficialClient:
     ) -> Dict[str, Any]:
         """上传并发送 C2C 富媒体（use_reply_pool=False 强制主动消息省额度）。"""
         data = self.upload_c2c_media(user_openid, file_type, url, srv=srv)
-        file_info = data.get("file_info") if isinstance(data, dict) else None
+        # 与群聊路径共用同一套判定（见 _extract_file_info）
+        file_info = self._extract_file_info(data)
         if not file_info:
             raise QQOfficialAPIError(500, 500, f"富媒体上传返回异常: {data!r}")
 

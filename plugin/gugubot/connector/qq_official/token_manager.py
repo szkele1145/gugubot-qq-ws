@@ -12,6 +12,7 @@ token 有效期约 7200 秒，实现里提前 ``EXPIRE_MARGIN`` 秒刷新，并�
 
 from __future__ import annotations
 
+import re
 import threading
 import time
 from typing import Optional
@@ -73,8 +74,21 @@ class QQTokenManager:
             json={"appId": self._appid, "clientSecret": self._secret},
             timeout=10,
         )
-        resp.raise_for_status()
-        data = resp.json()
+        if resp.status_code >= 400:
+            # 官方在 4xx 时会在响应体里给出具体原因（如 appid/secret 错误）。
+            # 直接 raise_for_status() 会丢掉 body，只剩一句
+            # "400 Client Error: Bad Request for url: ..."——排障时完全看不出
+            # 是凭证错了还是接口变了。这里把 body 一并带进异常。
+            detail = (resp.text or "")[:300]
+            raise RuntimeError(
+                f"获取 access_token 失败（HTTP {resp.status_code}）: {detail}"
+            )
+        try:
+            data = resp.json()
+        except ValueError as e:
+            raise RuntimeError(f"获取 access_token 返回非 JSON: {(resp.text or '')[:300]}") from e
+        if not isinstance(data, dict):
+            raise RuntimeError(f"获取 access_token 返回格式异常: {data!r}")
         token = data.get("access_token")
         try:
             expire_in = int(float(data.get("expires_in", 7200)))
@@ -83,6 +97,49 @@ class QQTokenManager:
         if not token:
             raise RuntimeError(f"获取 access_token 失败: {data}")
         return token, expire_in
+
+    @staticmethod
+    def _is_credential_error(err: Exception) -> bool:
+        """凭证类错误（appid/secret 错、被拒）：重试必然再失败。
+
+        旧实现靠 ``str(err)`` 做子串匹配（"401"/"403"/"invalid"）——
+        既**漏判**（官方 4xx 的中文原因或别的措辞不含这些词 → 白重试
+        一次，多耗 1s + 一次网络往返 + 限流风险），又可能**误判**
+        （异常文案里恰好出现 "401" 子串，如 URL 或参数中含该数字）。
+        现优先读结构化状态码，取不到才退回文案判断。
+        """
+        resp = getattr(err, "response", None)
+        status = getattr(resp, "status_code", None)
+        if isinstance(status, int):
+            # 4xx（除 429 限流外）都是「请求本身有问题」，重试无意义；
+            # 429 是限流，退避重试反而有意义。
+            if 400 <= status < 500 and status != 429:
+                return True
+            return False
+        msg = str(err)
+        # 取不到状态码（如自抛的 RuntimeError）：按关键词粗判。
+        # 注意只用**明确指向凭证**的词，不要用 "appid"/"secret" 这类
+        # 会出现在普通网络错误文案里的词（URL 里就含 getAppAccessToken）。
+        lowered = msg.lower()
+        if "429" in lowered:
+            return False  # 限流：退避重试有意义
+        # 中文凭证文案（官方 body 常见措辞）
+        if any(k in msg for k in ("不合法", "不正确", "无效", "校验失败")):
+            # 但若整句其实是网络错误（含 url/超时），不算凭证问题
+            if not any(k in lowered for k in ("timeout", "timed out", "connection")):
+                return True
+        # 英文关键词。注意 "401" 只在「独立出现」时才算——
+        # URL/路径里恰好带 401 的数字（如 /401/refresh）不得误判。
+        if "unauthorized" in lowered or "forbidden" in lowered:
+            return True
+        if "invalid appid" in lowered or "invalid secret" in lowered:
+            return True
+        if "client secret" in lowered:
+            return True
+        # 独立的 401/403：要求前后不是数字/字母/斜杠（避免 URL 片段命中）
+        if re.search(r"(?<![\w/])(?:401|403)(?![\w/])", msg):
+            return True
+        return False
 
     def get_token(self) -> str:
         """获取可用 access_token（过期自动刷新；网络失败重试 1 次）。
@@ -124,8 +181,7 @@ class QQTokenManager:
                 except Exception as e:
                     last_err = e
                     # 凭证错误不重试（appid/secret 错，重试无意义）
-                    msg = str(e)
-                    if "401" in msg or "403" in msg or "invalid" in msg.lower():
+                    if self._is_credential_error(e):
                         break
                     time.sleep(1 + attempt)
             raise RuntimeError(f"获取 access_token 失败（已重试）: {last_err}")
