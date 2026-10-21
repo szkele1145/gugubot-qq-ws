@@ -73,6 +73,18 @@ class OfficialStatusSystem(BasicSystem):
         if rest in ("我是谁", "whoami"):
             return await self._handle_whoami(broadcast_info, connector)
 
+        # ---- #绑群 <群号>：手动绑定本群的真实群号 ----
+        if rest.startswith("绑群") or rest.startswith("bindgroup"):
+            return await self._handle_bind_group(broadcast_info, connector, rest)
+
+        # ---- #解绑群：解除本群的真实群号绑定 ----
+        if rest in ("解绑群", "unbindgroup"):
+            return await self._handle_unbind_group(broadcast_info, connector)
+
+        # ---- #群绑定：查看全部群绑定 ----
+        if rest in ("群绑定", "groupbindings"):
+            return await self._handle_group_bindings(broadcast_info, connector)
+
         return False
 
     # ------------------------------------------------------------------ #
@@ -205,6 +217,129 @@ class OfficialStatusSystem(BasicSystem):
 
         await self.reply_to_source(
             broadcast_info, [MessageBuilder.text('\n'.join(lines))]
+        )
+        return True
+
+    # ------------------------------------------------------------------ #
+    # #绑群 / #解绑群 / #群绑定
+    # ------------------------------------------------------------------ #
+
+    def _current_group_openid(self, broadcast_info) -> str:
+        """从 raw 里取本群 group_openid（official 群消息事件自带）。"""
+        raw = broadcast_info.raw if isinstance(broadcast_info.raw, dict) else {}
+        return str(raw.get("group_openid", "") or "")
+
+    async def _handle_bind_group(
+        self, broadcast_info: BroadcastInfo, connector, rest: str
+    ) -> bool:
+        """``#绑群 <群号>``：把当前群手动绑定到指定真实群号。
+
+        为什么需要：``bind_group_openid()`` 是「先到先得抢槽位」——
+        配置里写了 2 个真实群号时，**哪个群先 @ 机器人就抢到哪个
+        槽位**。官方 API 不返回真实 QQ 群号（隐私设计），插件无从自动
+        对应，只能靠顺序猜 —— 猜错就是**群号错位**：``forward_group_ids``
+        里的号会把消息发到**别的群**，且全程无任何报错。
+
+        本命令让管理员在**目标群里**直接把「这个 openid 就是群号 N」
+        写死，彻底消除顺序依赖。
+        """
+        if not broadcast_info.is_admin:
+            await self.reply_to_source(
+                broadcast_info, [MessageBuilder.text("仅管理员可绑定群号")]
+            )
+            return True
+
+        group_openid = self._current_group_openid(broadcast_info)
+        if not group_openid:
+            await self.reply_to_source(
+                broadcast_info,
+                [MessageBuilder.text("无法识别当前群（仅支持在群聊中使用）")],
+            )
+            return True
+
+        # 解析参数：#绑群 123456789
+        parts = rest.split()
+        arg = parts[1].strip() if len(parts) > 1 else ""
+        # 兼容不带空格的写法：#绑群123456789
+        if not arg:
+            no_space = rest[3:] if rest.startswith("绑群") else rest[len("bindgroup"):]
+            arg = no_space.strip()
+        if not arg:
+            await self.reply_to_source(
+                broadcast_info,
+                [MessageBuilder.text("用法：#绑群 <真实群号>（例：#绑群 123456789）")],
+            )
+            return True
+
+        try:
+            ok, message = connector.id_mapper.bind_group_manually(
+                group_openid, arg
+            )
+        except Exception as e:
+            ok, message = False, f"绑定失败：{e}"
+        await self.reply_to_source(
+            broadcast_info, [MessageBuilder.text(message)]
+        )
+        return True
+
+    async def _handle_unbind_group(
+        self, broadcast_info: BroadcastInfo, connector
+    ) -> bool:
+        """``#解绑群``：解除当前群的真实群号绑定（退回纯虚拟号）。"""
+        if not broadcast_info.is_admin:
+            await self.reply_to_source(
+                broadcast_info, [MessageBuilder.text("仅管理员可解绑群号")]
+            )
+            return True
+
+        group_openid = self._current_group_openid(broadcast_info)
+        if not group_openid:
+            await self.reply_to_source(
+                broadcast_info,
+                [MessageBuilder.text("无法识别当前群（仅支持在群聊中使用）")],
+            )
+            return True
+
+        try:
+            ok, message = connector.id_mapper.unbind_group(group_openid)
+        except Exception as e:
+            ok, message = False, f"解绑失败：{e}"
+        await self.reply_to_source(
+            broadcast_info, [MessageBuilder.text(message)]
+        )
+        return True
+
+    async def _handle_group_bindings(
+        self, broadcast_info: BroadcastInfo, connector
+    ) -> bool:
+        """``#群绑定``：列出全部「真实群号 ↔ openid」绑定。"""
+        if not broadcast_info.is_admin:
+            await self.reply_to_source(
+                broadcast_info, [MessageBuilder.text("仅管理员可查看群绑定")]
+            )
+            return True
+
+        try:
+            bindings = connector.id_mapper.list_group_bindings()
+        except Exception as e:
+            await self.reply_to_source(
+                broadcast_info, [MessageBuilder.text(f"读取绑定失败：{e}")]
+            )
+            return True
+
+        if not bindings:
+            await self.reply_to_source(
+                broadcast_info,
+                [MessageBuilder.text("尚无任何「真实群号 ↔ openid」绑定")],
+            )
+            return True
+
+        lines = ["== 群绑定列表（真实群号 → openid 前缀）=="]
+        for legacy, openid in bindings:
+            shown = openid[:10] + "…" if len(str(openid)) > 10 else openid
+            lines.append(f"  {legacy} → {shown}")
+        await self.reply_to_source(
+            broadcast_info, [MessageBuilder.text("\n".join(lines))]
         )
         return True
 

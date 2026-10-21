@@ -369,6 +369,98 @@ class QQIDMapper:
         with self._lock:
             return self._openid_group_legacy.get(group_openid)
 
+    def bind_group_manually(
+        self, group_openid: str, legacy_group_id: str
+    ) -> tuple:
+        """管理员手动把某群 openid 绑定到指定真实群号。
+
+        为什么需要
+        ----------
+        ``bind_group_openid()`` 是「先到先得抢槽位」：配置里写了 3 个
+        真实群号时，**哪个群先 @ 机器人就抢到哪个槽位**。官方 API 不
+        返回真实 QQ 群号（隐私设计），插件无从自动对应，只能靠顺序猜
+        —— 猜错就是**群号错位**：``forward_group_ids`` 里的号会把消息
+        发到**别的群**，而且全程无任何报错。
+
+        手动绑定让管理员在**目标群里**发一条命令，把「这个 openid 就是
+        我的群号 N」明确写死，彻底消除顺序依赖。
+
+        Returns
+        -------
+        tuple
+            ``(ok, message)``：ok 为 True 表示绑定成功（或本来就已绑定到
+            同一个号）；message 是给管理员看的中文说明。
+        """
+        if not group_openid:
+            return False, "无法识别当前群（缺少 group_openid）"
+        legacy_group_id = str(legacy_group_id or "").strip()
+        if not legacy_group_id:
+            return False, "请提供要绑定的群号，例如：#绑群 123456789"
+        if not legacy_group_id.isdigit():
+            return False, f"群号必须是纯数字，当前为 {legacy_group_id}"
+
+        with self._lock:
+            # 该群已绑定到别的真实群号 → 允许改绑（管理员主动纠正）
+            current = self._openid_group_legacy.get(group_openid)
+            if current == legacy_group_id:
+                return True, f"本群已绑定到群号 {legacy_group_id}，无需重复绑定"
+
+            # 该真实群号是否已被别的 openid 占用
+            occupied_by = self._legacy_group_openid.get(legacy_group_id)
+            if occupied_by and occupied_by != group_openid:
+                # 换绑：把旧绑定摘掉（否则该真实群号对应两个 openid，
+                # 发送时按该群号会发到旧群）。
+                # **只摘「真实群号绑定」，不动 _group_map**：后者是
+                # 「openid → 虚拟号」的永久映射（号永不复用），删掉会让
+                # 该群的历史绑定数据 / 白名单指向一个再也不会出现的号。
+                self._openid_group_legacy.pop(occupied_by, None)
+                self._legacy_group_openid.pop(legacy_group_id, None)
+
+            # 若本群之前占用过别的真实群号，先释放
+            if current and self._legacy_group_openid.get(current) == group_openid:
+                self._legacy_group_openid.pop(current, None)
+                self._openid_group_legacy.pop(group_openid, None)
+
+            self._legacy_group_openid[legacy_group_id] = group_openid
+            self._openid_group_legacy[group_openid] = legacy_group_id
+            # 手动绑定后该群不再是「待绑定槽位」的消费者
+            if legacy_group_id in self._pending_legacy_groups:
+                self._pending_legacy_groups.remove(legacy_group_id)
+            self._save()
+            if self._logger:
+                self._logger.info(
+                    f"[QQ官方] 手动绑定：群 {group_openid} → 群号 {legacy_group_id}"
+                )
+            return True, f"已把本群绑定到群号 {legacy_group_id}"
+
+    def unbind_group(self, group_openid: str) -> tuple:
+        """解除某群的真实群号绑定（退回纯虚拟号）。
+
+        Returns
+        -------
+        tuple
+            ``(ok, message)``。
+        """
+        if not group_openid:
+            return False, "无法识别当前群（缺少 group_openid）"
+        with self._lock:
+            legacy = self._openid_group_legacy.get(group_openid)
+            if not legacy:
+                return False, "本群尚未绑定真实群号"
+            self._openid_group_legacy.pop(group_openid, None)
+            self._legacy_group_openid.pop(legacy, None)
+            self._save()
+            if self._logger:
+                self._logger.info(
+                    f"[QQ官方] 手动解绑：群 {group_openid} 解除群号 {legacy}"
+                )
+            return True, f"已解除本群与群号 {legacy} 的绑定"
+
+    def list_group_bindings(self) -> list:
+        """列出所有「真实群号 → openid」绑定（供状态查询用）。"""
+        with self._lock:
+            return sorted(self._legacy_group_openid.items())
+
     # ------------------------------------------------------------------ #
     # 统一入口
     # ------------------------------------------------------------------ #
