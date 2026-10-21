@@ -224,9 +224,10 @@ class ConfigCheckSystem(BasicSystem):
         # ---- 官方模式专属：ID 形态与依赖成员列表的系统 ----
         mapper = getattr(official_connector, "id_mapper", None)
         if mapper is not None:
-            # 1) admin_ids / admin_group_ids / group_ids 应为虚拟号（官方
-            #    openid 非数字且不可发送为普通目标；虚拟号为 12 位数字）
-            def _check_virtual(key_path: list, label: str) -> None:
+            # 1) admin_ids：与**玩家绑定账号**（虚拟用户号）比对
+            #    → 官方模式必须填虚拟用户号（#我是谁 里查到的 100000xxx）。
+            #    填真实 QQ 号永远匹配不上任何绑定账号 → 管理员判定失效。
+            def _check_virtual_user_ids(key_path: list, label: str) -> None:
                 nonlocal ok
                 ids = self.config.get_keys(key_path, []) or []
                 bad = [
@@ -234,7 +235,10 @@ class ConfigCheckSystem(BasicSystem):
                     if i and not (
                         str(i).isdigit()
                         and len(str(i)) == 12
-                        and str(i)[:6] in ("100000", "200000")
+                        # 只接受**用户**号段（100000xxx）：管理员是「人」，
+                        # 与玩家绑定账号比对的是虚拟**用户**号。填群号段
+                        # （200000xxx）永远匹配不上 → 管理员判定静默失效。
+                        and str(i)[:6] == "100000"
                     )
                 ]
                 if bad:
@@ -242,18 +246,90 @@ class ConfigCheckSystem(BasicSystem):
                     lines.append(
                         f"{label}: 含疑似非虚拟号条目 {bad[:3]}"
                         f"{'...' if len(bad) > 3 else ''} ❌（官方模式请填 #我是谁 "
-                        f"查到的 100000xxx/200000xxx 虚拟号，而非 QQ 号/openid）"
+                        f"查到的 100000xxx 虚拟号，而非 QQ 号/openid）"
                     )
 
-            _check_virtual(
+            _check_virtual_user_ids(
                 ["connector", "QQ", "permissions", "admin_ids"], "admin_ids"
             )
-            _check_virtual(
+
+            # 2) 群类配置项（group_ids / admin_group_ids）：
+            #    **真实群号才是标准用法**，不能按虚拟号检查！
+            #
+            #    - 官方 openid 不透明，插件内部用「虚拟号」代表群；
+            #    - 但 id_mapper.register_legacy_groups() 的槽位绑定机制
+            #      就是为「用户在配置里填真实 QQ 群号」设计的：填了之后
+            #      群内 @机器人 说句话即自动绑定该 openid，实现旧配置
+            #      无感迁移（见 id_map.py 顶部「与旧配置兼容」一节）；
+            #    - 群过滤逻辑（echo / bound_notice）也明确按
+            #      「source_id 是虚拟群号，admin_group_ids 是配置里的
+            #      真实群号」处理，见 bound_notice.py 的注释。
+            #
+            #    旧实现把这三项一律按「必须是 12 位虚拟号」检查 →
+            #    **误报**：用户按文档填真实群号（正确用法）却被告知
+            #    「疑似非虚拟号」。现改为三态提示：虚拟号 ✅ / 真实群号
+            #    ✅（会走槽位自动绑定）/ openid 原文 ✅
+            #    （register_legacy_groups 对非数字条目做 explicit_openids
+            #    自映射登记，见 id_map.py）。只有「既非数字、又不像
+            #    openid 原文」的条目才报错。
+            def _looks_like_openid(s: str) -> bool:
+                # 官方 openid 是 32 位十六进制串；宽一点接受 24-40 位
+                # 十六进制，避免官方将来变更长度时误报
+                return len(s) in range(24, 41) and all(
+                    c in "0123456789abcdefABCDEF" for c in s
+                )
+
+            def _check_group_ids(key_path: list, label: str) -> None:
+                nonlocal ok
+                ids = self.config.get_keys(key_path, []) or []
+                virtuals = []
+                reals = []
+                opens = []
+                others = []
+                for i in ids:
+                    s = str(i).strip() if i is not None else ""
+                    if not s:
+                        continue
+                    if s.isdigit() and len(s) == 12 and s[:6] in ("100000", "200000"):
+                        virtuals.append(s)
+                    elif s.isdigit():
+                        # 9-10 位真实 QQ 群号 → 走槽位自动绑定（标准用法）
+                        reals.append(s)
+                    elif _looks_like_openid(s):
+                        # openid 原文 → explicit 自映射登记，**无需**绑定
+                        opens.append(s)
+                    else:
+                        others.append(s)
+                if others:
+                    ok = False
+                    lines.append(
+                        f"{label}: 含无法识别的条目 {others[:3]}"
+                        f"{'...' if len(others) > 3 else ''} ❌（请填 QQ 群号、"
+                        f"openid 原文，或 #我是谁 查到的 200000xxx 虚拟号）"
+                    )
+                else:
+                    parts = []
+                    if virtuals:
+                        parts.append(f"{len(virtuals)} 个虚拟号")
+                    if reals:
+                        parts.append(f"{len(reals)} 个真实群号")
+                    if opens:
+                        parts.append(f"{len(opens)} 个 openid 原文")
+                    hint = ""
+                    if reals:
+                        hint = "（真实群号需在群内 @机器人 完成自动绑定）"
+                    if not parts:
+                        # 全空列表：不拼出 "label:  ✅" 这种空统计
+                        lines.append(f"{label}: 未配置 ✅")
+                    else:
+                        lines.append(f"{label}: {' + '.join(parts)} ✅{hint}")
+
+            _check_group_ids(
+                ["connector", "QQ", "permissions", "group_ids"], "group_ids"
+            )
+            _check_group_ids(
                 ["connector", "QQ", "permissions", "admin_group_ids"],
                 "admin_group_ids",
-            )
-            _check_virtual(
-                ["connector", "QQ", "permissions", "group_ids"], "group_ids"
             )
 
             # 2) 依赖群成员列表的系统在官方模式必失效（官方无成员列表接口）

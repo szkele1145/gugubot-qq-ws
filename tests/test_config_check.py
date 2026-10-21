@@ -138,7 +138,11 @@ text = REPLIES[0][0]["data"]["text"]
 assert "全部通过" in text, text
 print("PASS: 全配置 → 全部通过 ✅")
 
-# ---- 3.6) 官方模式：group_ids 填了 OneBot 真实群号（非 12 位虚拟号）→ 存在问题 ----
+# ---- 3.6) 官方模式：group_ids 填真实群号 → ✅（旧配置无感迁移的标准用法）----
+# 回归：旧实现把 group_ids/admin_group_ids 一律按「必须是 12 位虚拟号」
+# 检查 → 用户按官方文档填**真实 QQ 群号**（id_mapper 槽位绑定机制就是
+# 为此设计的：群内 @机器人 即自动绑定）却被告知「疑似非虚拟号 ❌」。
+# 与「群号绑定流程（旧配置无感迁移）」的设计意图直接矛盾。
 cfg["connector"]["QQ"]["permissions"] = {
     "admin_ids": ["100000000000"],
     "group_ids": ["1103662998"],
@@ -147,8 +151,10 @@ REPLIES.clear()
 r = loop.run_until_complete(system.process_broadcast_info(mk_info(True)))
 assert r is True and REPLIES
 text = REPLIES[0][0]["data"]["text"]
-assert "非虚拟号" in text and "存在问题" in text, text
-print("PASS: 官方模式 group_ids 填真实群号 → 提示改用虚拟号 ❌")
+assert "非虚拟号" not in text, f"真实群号不应被判为非虚拟号: {text}"
+assert "自动绑定" in text, f"应提示需在群内 @机器人 完成自动绑定: {text}"
+assert "全部通过" in text, text
+print("PASS: 官方模式 group_ids 填真实群号 → 通过并提示自动绑定 ✅")
 
 # ---- 3.7) 官方模式：启用依赖成员列表的系统 → ⚠️ 提示将不生效 ----
 cfg["connector"]["QQ"]["permissions"] = {
