@@ -1,6 +1,5 @@
 """Bridge connector implementation for cross-server communication between Minecraft servers."""
 
-import asyncio
 import json
 import time
 import threading
@@ -208,6 +207,65 @@ class BridgeConnector(BasicConnector):
                 daemon=True,
             ).start()
 
+    def _run_on_mcdr_loop(self, coro_factory, timeout: float = 10.0):
+        """在 MCDR 的事件循环上执行一个协程，并**同步**取回结果。
+
+        为什么不能用 ``asyncio.run()``
+        ----------------------------
+        本连接器的消息回调跑在 **websocket 库的收包线程**里（不是
+        asyncio 线程）。此前的实现用 ``asyncio.run(...)`` 在该线程里
+        **临时造一个事件循环**来跑插件逻辑，有两个致命问题：
+
+        1. ``asyncio.run()`` 在协程返回后**关闭**这个临时循环，关闭时
+           会**强制取消**其中所有未完成的后台任务。本插件里
+           ``logic/system/vote.py`` 的 ``asyncio.create_task(
+           self._monitor_vote(...))`` 与
+           ``logic/plugins/player_notice.py`` 的 ``create_task(
+           _delayed_leave())`` 都是 fire-and-forget 形态 → 在桥接通道
+           下这些任务**刚创建就被取消、从未真正执行** → **投票监控
+           静默失效（投票永不超时结算）**、延迟离场提醒永远不触发。
+        2. 临时循环与 MCDR 主循环不是同一个 → 插件里创建的
+           ``asyncio.Lock`` / ``Queue`` 等跨协程原语无法与主循环共享，
+           定时任务（``inactive_check`` / ``unbound_check``）也拿不到
+           正确的 loop。
+
+        MCDR 提供的正规做法是 ``server.schedule_task(...)``：它把协程
+        提交到 **MCDR 常驻的 async executor 事件循环**上执行（见
+        ``mcdreforged/executor/task_executor_async.py`` 的
+        ``submit()`` → ``event_loop.create_task(coro)``），因为循环
+        长驻，``create_task`` 派生的子任务**不会被取消**。
+
+        Parameters
+        ----------
+        coro_factory : Callable[[], Awaitable]
+            返回协程的**工厂**（传协程对象会提前绑定到错误的循环）。
+        timeout : float
+            等待结果的超时秒数。
+
+        Returns
+        -------
+        Any
+            协程的返回值；超时或出错时返回 ``None``。
+        """
+        try:
+            future = self.server.schedule_task(coro_factory)
+        except Exception as e:
+            self.logger.error(
+                f"{self.log_prefix} 调度到 MCDR 事件循环失败: {e}\n{traceback.format_exc()}"
+            )
+            return None
+
+        if future is None:
+            return None
+
+        try:
+            return future.result(timeout=timeout)
+        except Exception as e:
+            self.logger.error(
+                f"{self.log_prefix} MCDR 事件循环任务执行失败: {e}"
+            )
+            return None
+
     def _handle_server_message(self, client: Dict, _: Any, message: str) -> None:
         """Process a message received on the server side and relay it."""
         try:
@@ -221,13 +279,17 @@ class BridgeConnector(BasicConnector):
             if not skip_relay and self.ws_server and self.ws_server.get_client_count() > 1:
                 message_data["bridge_source"] = client.get("address", ["unknown", 0])[0]
                 sender_id = message_data.get("sender_id", None)
-                message_data["is_admin"] = asyncio.run(self._is_admin(sender_id))
+                message_data["is_admin"] = self._run_on_mcdr_loop(
+                    lambda: self._is_admin(sender_id)
+                )
 
                 for other_client in self.ws_server.get_clients():
                     if other_client["id"] != client["id"]:
                         self.ws_server.send_message(other_client, message_data)
 
-            asyncio.run(self._process_bridge_message(message_data))
+            self._run_on_mcdr_loop(
+                lambda: self._process_bridge_message(message_data)
+            )
 
         except Exception as e:
             self.logger.error(f"{self.log_prefix} 消息处理失败: {e}")
@@ -270,7 +332,9 @@ class BridgeConnector(BasicConnector):
             ):
                 return
 
-            asyncio.run(self._process_bridge_message(message_data))
+            self._run_on_mcdr_loop(
+                lambda: self._process_bridge_message(message_data)
+            )
 
         except Exception as e:
             self.logger.error(f"{self.log_prefix} 消息处理失败: {e}")
