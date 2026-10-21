@@ -136,10 +136,15 @@ class WebSocketClient:
         if reconnect > 0:
             run_kwargs["reconnect"] = reconnect
 
+        # ping_interval / ping_timeout 各自独立传参：
+        # websocket-client 的 run_forever 默认 ping_interval=0（即禁用
+        # 协议层 ping）。此前 ping_interval<=0 时会把 ping_timeout **连
+        # 带**一起跳过 → 用户显式写的 ping_timeout 被静默忽略，run_forever
+        # 改用库默认值（10s）。现在两者分开传，用户写什么就是什么。
         if ping_interval > 0:
             run_kwargs["ping_interval"] = ping_interval
-            if ping_timeout > 0:
-                run_kwargs["ping_timeout"] = ping_timeout
+        if ping_timeout > 0:
+            run_kwargs["ping_timeout"] = ping_timeout
 
         # Configure SSL options
         if use_ssl:

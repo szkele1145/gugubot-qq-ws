@@ -181,11 +181,19 @@ class QQWebSocketConnector(BasicConnector):
             logger=self.logger,
         )
 
-        # Disable ping/pong; the OneBot server does not require it.
+        # 心跳参数来自配置（connector.QQ.connection.ping_interval /
+        # ping_timeout）。此前这里硬编码 0/0，等于把用户在
+        # default_config.yml 里配的 ping_interval: 5 / ping_timeout: 4
+        # 完全忽略掉 —— L137-142 把值读进 self.ping_interval /
+        # self.ping_timeout 后就再也没用过（死代码）。
+        #
+        # 与 bridge_connector.py 的做法保持一致：把配置值传下去。
+        # 设为 0 仍可显式关闭心跳（websocket-client 的 run_forever
+        # 里 ping_interval=0 即禁用）。
         self.ws_client.connect(
             reconnect=self.reconnect,
-            ping_interval=0,
-            ping_timeout=0,
+            ping_interval=self.ping_interval,
+            ping_timeout=self.ping_timeout,
             use_ssl=self.use_ssl,
             verify=self.verify,
             ca_certs=self.ca_certs,
