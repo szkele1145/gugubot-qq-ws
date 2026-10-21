@@ -65,6 +65,55 @@ class MCConnector(BasicConnector):
         registered = self.connector_manager.get_connector(origin)
         return registered is None or isinstance(registered, MCConnector)
 
+    def _map_custom_group_name(
+        self,
+        custom_group_name: dict,
+        source_id: str,
+        source: str,
+        qq_source: str,
+    ) -> str:
+        """按群号查自定义群名（兼容官方模式的虚实号两套 ID）。
+
+        官方直连模式下，消息的 ``source_id`` 是**虚拟群号**（12 位
+        200000xxx），而用户在 ``custom_group_name`` 里填的键是**真实
+        QQ 群号**（旧配置）→ 直接查表**永远匹配不上** → 自定义群名
+        静默失效，游戏里显示的一直是「QQ」。
+
+        （「改造说明.md」的「群号绑定流程」承诺过「custom_group_name
+        等按群号配置的功能照常生效」，这条承诺在官方模式下此前
+        并没有真正兑现。）
+
+        这里按两种键都查一遍：
+        1. 直接用 ``source_id`` 查（OneBot 模式 / 用户直接填虚拟号）；
+        2. 官方模式下把 ``source_id`` 翻成 ``group_openid``，再把配置
+           里的每个键（真实群号 / 虚拟号 / openid 原文）也翻成
+           ``group_openid`` 比对 —— 与 ``echo.py`` / ``bound_notice.py``
+           同一套「统一翻 openid 再比对」的修法。
+        """
+        if not custom_group_name:
+            return source
+        key = str(source_id)
+        if key in custom_group_name:
+            return custom_group_name[key]
+
+        # 官方模式：虚拟号 ↔ 真实群号的对应关系在 id_mapper 里
+        qq_connector = self.connector_manager.get_connector(qq_source)
+        mapper = getattr(qq_connector, "id_mapper", None) if qq_connector else None
+        if mapper is None:
+            return source
+        try:
+            target_openid = str(mapper.to_official_group(key))
+        except Exception:
+            return source
+        for cfg_key, name in custom_group_name.items():
+            try:
+                cfg_openid = str(mapper.to_official_group(str(cfg_key)))
+            except Exception:
+                continue
+            if cfg_openid and cfg_openid == target_openid:
+                return name
+        return source
+
     async def connect(self) -> None:
         """Establish the connection (no-op since MCDR manages the lifecycle)."""
         self.logger.info(f"{self.log_prefix} 就绪 ~")
@@ -259,8 +308,10 @@ class MCConnector(BasicConnector):
 
             custom_group_name = self.config.get_keys(
                 ["connector", "QQ", "permissions", "custom_group_name"], {}
+            ) or {}
+            source = self._map_custom_group_name(
+                custom_group_name, source_id, source, qq_source
             )
-            source = custom_group_name.get(source_id, source)
 
             # ----- native_chat 模式：系统消息通道注入 -----
             # 注入格式（整行纯文本，所见即所得）：
