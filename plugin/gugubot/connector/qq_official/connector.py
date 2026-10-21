@@ -152,6 +152,47 @@ class QQOfficialBot:
     # 发消息
     # ------------------------------------------------------------------ #
 
+    def _officialize_at_segments(self, segments) -> list:
+        """把 at 段的**虚拟用户号**还原成官方 ``<@!openid>`` 标记。
+
+        收发不对称的问题：接收端把官方 ``<@!openid>`` 展开成 at 段，
+        其中 ``qq`` 字段存的是**虚拟用户号**（见 parser 的
+        ``_expand_content_segments``）；而发送端此前直接把 at 段转成
+        纯文本 ``@100000000001`` → 群里显示一串无意义数字，**根本
+        @ 不到人**。
+
+        官方平台的 @ 语法是 ``<@!openid>``，因此这里把虚拟号翻回
+        openid 再拼进 content。
+
+        翻不出的（未登记的数字号）→ 降级成纯文本 ``@xxx``，绝不把
+        无效标记发给官方（官方会把无法解析的 ``<@!xxx>`` 当普通文本
+        发出去，甚至导致整条消息被拒）。
+        """
+        if not isinstance(segments, list):
+            return segments
+        mapper = self._c.id_mapper
+        out = []
+        for seg in segments:
+            if not (isinstance(seg, dict) and seg.get("type") == "at"):
+                out.append(seg)
+                continue
+            data = seg.get("data", {}) or {}
+            qq = str(data.get("qq", "") or "")
+            if not qq:
+                out.append(seg)
+                continue
+            if mapper.is_legacy_user(qq):
+                # 已登记的虚拟用户号 → 翻回真实 openid
+                openid = str(mapper.to_official_user(qq))
+                out.append({"type": "text", "data": {"text": f"<@!{openid}>"}})
+            elif not qq.isdigit():
+                # qq 本身就是 openid 原文（非纯数字）→ 直接用
+                out.append({"type": "text", "data": {"text": f"<@!{qq}>"}})
+            else:
+                # 未登记的数字号 → 翻不出真实身份 → 降级纯文本
+                out.append({"type": "text", "data": {"text": f"@{qq}"}})
+        return out
+
     @staticmethod
     def _filter_images(segments, sent_data_ids=None) -> list:
         """滤掉已成功作为富媒体发送的图片段。
@@ -267,6 +308,8 @@ class QQOfficialBot:
 
         # 已成功发出的图片不再以 [图片:xx] 占位重复出现在文本里
         text_segments = self._filter_images(message, sent_ids)
+        # at 段的虚拟用户号 → 官方 <@!openid>（否则群里 @ 不到人）
+        text_segments = self._officialize_at_segments(text_segments)
         content = segments_to_plain_text(text_segments)
         if content:
             return await self._c._send_group(openid, content)
@@ -280,6 +323,7 @@ class QQOfficialBot:
 
         # 已成功发出的图片不再以占位重复出现在文本里
         text_segments = self._filter_images(message, sent_ids)
+        text_segments = self._officialize_at_segments(text_segments)
         content = segments_to_plain_text(text_segments)
         if content:
             return await self._c._send_c2c(openid, content)
