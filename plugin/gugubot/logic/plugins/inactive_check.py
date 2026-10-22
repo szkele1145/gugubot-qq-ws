@@ -324,9 +324,15 @@ class InactiveCheckSystem(BasicConfig, BasicSystem):
         return None
 
     def _get_bedrock_player_uuid(self, player_name: str) -> Optional[str]:
-        """通过 MCProfile.io API 获取基岩版玩家的 UUID（XUID 或 Floodgate UUID）
+        """通过 MCProfile.io API 获取基岩版玩家的 UUID（同步实现）。
 
-        使用缓存机制，避免频繁调用 API。
+        **不要在协程里直接调用本方法** —— 它内部是**阻塞式 HTTP**
+        （``requests.get``，timeout=10 秒），会卡住整个 MCDR 事件循环。
+        协程请用 :meth:`_get_bedrock_player_uuid_async`（内部经
+        ``run_in_executor`` 丢到线程池）。
+
+        本方法只保留给**同步上下文**（如测试）使用；生产路径统一走
+        async 版本。
 
         Parameters
         ----------
@@ -337,6 +343,25 @@ class InactiveCheckSystem(BasicConfig, BasicSystem):
         -------
         Optional[str]
             玩家 UUID（优先返回 Floodgate UUID，如果没有则返回 XUID），如果获取失败则返回None
+        """
+        return self._get_bedrock_player_uuid_blocking(player_name)
+
+    def _get_bedrock_player_uuid_blocking(self, player_name: str) -> Optional[str]:
+        """查缓存 + 阻塞式 HTTP 查询 + 回写缓存（**同步**，会阻塞线程）。
+
+        整段逻辑（含缓存的读-改-写）刻意保持为**一个同步函数**，
+        由 async 包装器整体丢进 executor → 在线程里「读-改-写」是
+        连续的，缓存字典不会被并发穿插改写。
+
+        Parameters
+        ----------
+        player_name : str
+            基岩版玩家名 (gamertag)
+
+        Returns
+        -------
+        Optional[str]
+            玩家 UUID，失败返回 None
         """
         # 获取缓存配置（默认缓存 6 个月，因为 UUID 不会经常变化）
         # 6 个月 = 180 天 = 15,552,000 秒
@@ -446,6 +471,52 @@ class InactiveCheckSystem(BasicConfig, BasicSystem):
         except Exception as e:
             self.logger.warning(f"解析基岩版玩家 {player_name} 信息时出错: {e}")
             return None
+
+    async def _get_bedrock_player_uuid_async(self, player_name: str) -> Optional[str]:
+        """查基岩版玩家 UUID 的**非阻塞**入口（协程专用）。
+
+        把同步阻塞的 HTTP 查询整体丢进线程池（默认 executor），事件
+        循环在查询期间**继续响应** QQ 消息 / 命令 / 其他任务。
+
+        修复前的问题：``_check_inactive_players`` 在 **MCDR 事件循环**
+        里直接调同步版 → 每次查询最长阻塞循环 **10 秒**，玩家数 ×
+        基岩名数量线性累加 → 期间所有 QQ 消息、命令、定时任务全部
+        停摆。
+
+        Parameters
+        ----------
+        player_name : str
+            基岩版玩家名 (gamertag)
+
+        Returns
+        -------
+        Optional[str]
+            玩家 UUID，失败返回 None
+        """
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None, self._get_bedrock_player_uuid_blocking, player_name
+        )
+
+    async def _lookup_bedrock_uuids_concurrently(
+        self, bedrock_names: list
+    ) -> list:
+        """并发查一批基岩版玩家名 → [(name, uuid), ...]。
+
+        旧的串行循环总耗时 = 各查询之和（最坏 10s × 人数）；改并发后
+        总耗时 ≈ **最慢的一个**。缓存命中的查询本身不进线程池（没有
+        HTTP），并发开销可忽略。
+        """
+        if not bedrock_names:
+            return []
+
+        async def one(name):
+            return name, await self._get_bedrock_player_uuid_async(name)
+
+        results = await asyncio.gather(
+            *[one(n) for n in bedrock_names], return_exceptions=False
+        )
+        return list(results)
 
     def _get_player_qq_accounts(self, player, qq_connector_name: str) -> list:
         """取玩家全部 QQ 绑定账号（含历史键）。
@@ -658,10 +729,12 @@ class InactiveCheckSystem(BasicConfig, BasicSystem):
                     latest_mtime = 0
                     found_any_file = False
 
-                    # 先检查基岩版玩家，通过 API 获取 UUID 然后检查本地存档
-                    for bedrock_name in player.bedrock_name:
-                        uuid = self._get_bedrock_player_uuid(bedrock_name)
-
+                    # 先检查基岩版玩家：API 查 UUID **并发**执行（线程池），
+                    # 不再阻塞事件循环；总耗时 ≈ 最慢的一个而非所有之和
+                    bedrock_uuids = await self._lookup_bedrock_uuids_concurrently(
+                        list(player.bedrock_name)
+                    )
+                    for bedrock_name, uuid in bedrock_uuids:
                         if not uuid:
                             continue
 
