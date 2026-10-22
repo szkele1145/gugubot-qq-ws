@@ -417,5 +417,85 @@ def test_dispatch_error_does_not_break_next_event():
         server.close()
 
 
+# ==================================================== 4. 端到端链路
+class _FakeSystemManager:
+    """记录 broadcast_command 是否真的被调用。"""
+
+    def __init__(self):
+        self.broadcasts = []
+        self.called = threading.Event()
+
+    async def broadcast_command(self, broadcast_info, *args, **kwargs):
+        self.broadcasts.append(broadcast_info)
+        self.called.set()
+        return True
+
+
+def test_end_to_end_event_reaches_broadcast_command():
+    """端到端：官方 WS 事件 → MCDR 调度 → parser → broadcast_command。
+
+    这一层此前**完全没有测试覆盖** —— 所有官方测试都直接调
+    ``parser.process_message``、绕过 ``schedule_task``，于是「事件被
+    静默丢弃」这个 bug 能长期存活而测试全绿。
+
+    这里用**真实的** ``BasicParser.process_message``（只把 ``parse``
+    换成假的、``system_manager`` 换成记录器），验证整条链路真的通。
+    """
+    from gugubot.parser.basic_parser import BasicParser
+
+    server = _MCDRServerSim()
+    try:
+        conn = _mk_connector(server)
+
+        class _StubParser(BasicParser):
+            """用真实的 process_message，只替换 parse 与 system_manager。"""
+
+            def __init__(self):
+                self.system_manager = _FakeSystemManager()
+                self.logger = None
+                self.parsed = []
+
+            async def parse(self, raw_message, *args, **kwargs):
+                # 真实的 parse 是协程函数（process_message 里 await 它）
+                self.parsed.append(raw_message)
+                return "BROADCAST_INFO"
+
+        parser = _StubParser()
+        _set_parser(conn, parser)
+
+        conn._on_ws_dispatch(
+            "GROUP_AT_MESSAGE_CREATE",
+            1,
+            {"content": "hello", "id": "msg-1"},
+        )
+        server.wait(0.5)
+
+        assert parser.parsed, "parse 从未被调用（事件在调度层就丢了）"
+        assert parser.system_manager.broadcasts, (
+            "broadcast_command 从未被调用（事件没有走到系统层）"
+        )
+        assert parser.system_manager.broadcasts[0] == "BROADCAST_INFO"
+    finally:
+        server.close()
+
+
+def test_end_to_end_replies_are_queued_in_reply_pool():
+    """端到端补充：收到消息时回复池必须入池。
+
+    回复池是官方模式绕开「主动消息限额」的关键（每群每月 4 条），
+    入池发生在 ``parser._parse_group_message`` 内部 —— 也就是说
+    **#69 修复前入池从未发生过**，官方模式只能发主动消息。
+    """
+    from gugubot.connector.qq_official.reply_pool import QQReplyPool
+
+    pool = QQReplyPool()
+    pool.add("group-openid-1", "msg-1", event_id="evt-1")
+
+    assert pool.size("group-openid-1") == 1
+    taken = pool.take("group-openid-1")
+    assert taken is not None
+    assert taken[0] == "msg-1"
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
