@@ -4,6 +4,7 @@ import asyncio
 import json
 import random
 import re
+import threading
 import time
 import traceback
 import uuid
@@ -47,6 +48,17 @@ class Bot:
         self.max_wait_time = max_wait_time if 0 < max_wait_time <= 9 else 9
         self.function_return = {}
         self.pending_requests = {}
+        # 这两个 dict 被**三个线程**碰：
+        #   - MCDR 循环（发起方）：登记、轮询、清理
+        #   - 收包线程（qq_connector 的 fast path）：写 function_return
+        #   - MCDR 循环（qq_parser.py）：写 function_return
+        # 单个 key 的 dict 读写在 CPython 里靠 GIL 保持原子，但
+        # 「先 in 再 []」「检查后删除」这类**复合操作不是原子的**，
+        # 中间可能被另一个线程改掉 → KeyError / 响应丢失。
+        # 这里用一把锁把「登记 / 存响应 / 取响应 / 清理」都串起来。
+        self._lock = threading.Lock()
+        # 孤儿响应的存入时刻（echo → time.time()），用于回收宽限期判断
+        self._orphan_stored_at: dict = {}
         self.self_id = None  # bot's own QQ ID
 
     @staticmethod
@@ -57,19 +69,117 @@ class Bot:
         return {"action": action, "params": params, "echo": params.get("echo", "")}
 
     def _cleanup_pending_requests(self) -> None:
+        """清理超时的请求记录与「孤儿响应」。
+
+        两类要回收的东西：
+
+        1. **超时请求**：``pending_requests`` 里超过
+           ``max_wait_time + 5`` 的条目（含其响应）。
+        2. **孤儿响应**：``function_return`` 里有、但 ``pending_requests``
+           里没有的条目。这类响应来自「响应早于登记到达」的窗口，
+           或者同一 WS 上别人的请求。请求方若随后登记了同名 echo，
+           它会**立刻**取走（``_take_response``）；取不走的（例如
+           请求已超时结束）则由这里按宽限期回收，**不会无限增长**。
+        """
         now = time.time()
-        stale_keys = [
-            k
-            for k, t in self.pending_requests.items()
-            if now - t > self.max_wait_time + 5
-        ]
-        for k in stale_keys:
-            if k in self.function_return:
-                del self.function_return[k]
-            if k in self.pending_requests:
-                del self.pending_requests[k]
+        grace = self.max_wait_time + 5
+        with self._lock:
+            stale_keys = [
+                k
+                for k, t in self.pending_requests.items()
+                if now - t > grace
+            ]
+            for k in stale_keys:
+                self.function_return.pop(k, None)
+                self.pending_requests.pop(k, None)
+
+            # 孤儿响应：pending 里没有 → 不属于任何在途请求。
+            # 刚存进来的（now - 存表时刻）不能立刻删 —— 那正是
+            # 「响应先到、请求方随后登记」的场景。给一个宽限期。
+            for k in list(self.function_return.keys()):
+                if k in self.pending_requests:
+                    continue
+                if now - self._orphan_stored_at.get(k, now) > grace:
+                    self.function_return.pop(k, None)
+                    self._orphan_stored_at.pop(k, None)
+
+    def _register_pending(self, echo: str) -> float:
+        """登记一个待响应的 echo，返回发起时间。
+
+        **必须在发送之前登记**：若先发送后登记，回包可能在登记完成前
+        就到达（本地 WS 回包很快）→ 收包线程的 fast path 查不到这个
+        echo → **响应被直接丢弃** → 等待方只能等满 max_wait_time 才
+        返回 None，且全程无任何报错。
+
+        Parameters
+        ----------
+        echo : str
+            本次请求的 echo id。
+
+        Returns
+        -------
+        float
+            发起时间（``time.time()``）。
+        """
+        start_time = time.time()
+        with self._lock:
+            self.pending_requests[echo] = start_time
+        return start_time
+
+    def _store_response(self, echo: str, message_data: dict) -> None:
+        """存放一个 API 响应（收包线程调用）。
+
+        **无条件存放**：即便 ``pending_requests`` 里还没有这个 echo
+        （响应比登记先到），也必须存下来 —— 否则请求方永远等不到，
+        只能等满超时。早到的响应会由 ``_cleanup_pending_requests`` 的
+        兜底清理机制回收（见下方「孤儿响应」说明）。
+
+        「孤儿响应」：理论上 echo 是 uuid，不会撞上别的请求；但如果
+        收到的是**别的**客户端发来的 echo（同一 WS 上多人共用），它会
+        一直留在 ``function_return`` 里。这类条目由
+        ``_cleanup_pending_requests`` 按「pending 里没有且超过宽限期」
+        回收，不无限增长。
+        """
+        with self._lock:
+            self.function_return[echo] = message_data
+            # 记录存入时刻 —— 供「孤儿响应」回收判断宽限期用
+            self._orphan_stored_at[echo] = time.time()
+
+    def _take_response(self, echo: str) -> Optional[dict]:
+        """取走一个 API 响应（原子：不存在返回 None）。
+
+        用单次 ``pop`` 而非「先 ``in`` 再 ``[]``」—— 后者是两次 dict
+        访问，中间收包线程/清理逻辑可能把条目删掉 → **KeyError**。
+        """
+        with self._lock:
+            data = self.function_return.pop(echo, None)
+            if data is not None:
+                self._orphan_stored_at.pop(echo, None)
+            return data
+
+    def _has_response(self, echo: str) -> bool:
+        """是否已有该 echo 的响应。"""
+        with self._lock:
+            return echo in self.function_return
+
+    def _forget(self, echo: str) -> None:
+        """清掉一个 echo 的全部记录（请求结束或超时时调用）。"""
+        with self._lock:
+            self.function_return.pop(echo, None)
+            self.pending_requests.pop(echo, None)
+            self._orphan_stored_at.pop(echo, None)
 
     def __getattr__(self, name):
+        # 内部属性（下划线开头、且不是 _get* 动态 API）缺失时必须抛
+        # AttributeError，而不是静默返回一个 async handler —— 否则
+        # 绕过 __init__ 构造的实例访问 self._lock 会拿到一个协程函数，
+        # 后面 `with self._lock:` 才炸，错误信息完全指不到根因。
+        if name.startswith("_") and not name.startswith("_get"):
+            raise AttributeError(
+                f"{type(self).__name__} 实例缺少内部属性 {name!r} "
+                "（该实例可能绕过了 __init__ 构造）"
+            )
+
         if (
             name.startswith("get_")
             or name.startswith("can_")
@@ -84,22 +194,29 @@ class Bot:
                 function_return_id = str(uuid.uuid4())
                 kwargs["echo"] = function_return_id
                 command_request = self.format_request(name, kwargs)
-                await self.send_message(command_request)
 
-                start_time = time.time()
-                self.pending_requests[function_return_id] = start_time
+                # **先登记，后发送**：登记若晚于发送，回包可能在登记
+                # 完成前就到达 → 收包线程的 fast path 查不到这个 echo
+                # → 响应被直接丢弃 → 本次调用只能等满 max_wait_time
+                # 后返回 None，且全程无任何报错。
+                start_time = self._register_pending(function_return_id)
 
                 try:
+                    await self.send_message(command_request)
+
                     while True:
-                        if function_return_id in self.function_return:
-                            return self.function_return[function_return_id]
+                        # 原子取走响应：单次 pop，不存在返回 None。
+                        # （旧的「先 in 再 []」两段式读，中间条目可能被
+                        #   收包线程/清理逻辑删掉 → KeyError 向上抛。）
+                        response = self._take_response(function_return_id)
+                        if response is not None:
+                            return response
 
                         await asyncio.sleep(0.2)
                         if time.time() - start_time >= self.max_wait_time:
                             return None
                 finally:
-                    self.function_return.pop(function_return_id, None)
-                    self.pending_requests.pop(function_return_id, None)
+                    self._forget(function_return_id)
 
         else:
 
@@ -507,9 +624,14 @@ class QQWebSocketConnector(BasicConnector):
                 message_data = json.loads(raw_message)
                 echo = message_data.get("echo")
                 if echo:
-                    if echo in self.bot.pending_requests:
-                        # API response — store for the awaiting coroutine
-                        self.bot.function_return[echo] = message_data
+                    # API response — store for the awaiting coroutine.
+                    # **无条件存储**：旧实现先查 ``pending_requests``，
+                    # 不在就直接丢弃 —— 但响应完全可能**先于**登记到达
+                    # （本地 WS 回包很快），于是响应被丢掉、请求方只能
+                    # 等满 max_wait_time 后拿到 None，且全程无报错。
+                    # 现在「先登记后发送」已把窗口关掉，这里再无条件
+                    # 兜一层，双保险。
+                    self.bot._store_response(echo, message_data)
                     return
             except Exception:
                 pass

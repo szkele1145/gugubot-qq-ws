@@ -131,7 +131,12 @@ class QQParser(BasicParser):
 
             echo = message_data.get("echo")  # 处理API调用的返回结果
             if echo:
-                self.connector.bot.function_return[echo] = message_data
+                # 走 Bot 的原子写入（与收包线程的 fast path 共用一把锁）
+                store = getattr(self.connector.bot, "_store_response", None)
+                if callable(store):
+                    store(echo, message_data)
+                else:
+                    self.connector.bot.function_return[echo] = message_data
                 return None
 
             event_type = message_data.get("post_type", "")
