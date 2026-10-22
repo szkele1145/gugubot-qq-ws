@@ -346,12 +346,63 @@ class InactiveCheckSystem(BasicConfig, BasicSystem):
         """
         return self._get_bedrock_player_uuid_blocking(player_name)
 
-    def _get_bedrock_player_uuid_blocking(self, player_name: str) -> Optional[str]:
-        """查缓存 + 阻塞式 HTTP 查询 + 回写缓存（**同步**，会阻塞线程）。
+    def _bedrock_cache_ttl(self) -> int:
+        """基岩版 UUID 缓存有效期（秒），默认 6 个月（UUID 不会经常变）。"""
+        # 6 个月 = 180 天 = 15,552,000 秒
+        return safe_int(self.config.get_keys(
+            ["system", "inactive_check", "bedrock_cache_ttl"], 15552000
+        ), 15552000)
 
-        整段逻辑（含缓存的读-改-写）刻意保持为**一个同步函数**，
-        由 async 包装器整体丢进 executor → 在线程里「读-改-写」是
-        连续的，缓存字典不会被并发穿插改写。
+    def _read_bedrock_cache(self, player_name: str):
+        """查缓存 → (状态, uuid)。
+
+        状态取值：
+
+        * ``"hit"``   —— 缓存有效，直接用（uuid 可能为 None：之前查失败）
+        * ``"miss"``  —— 缓存里没有这个玩家
+        * ``"expired"``—— 缓存里有但已过期，需要重新查（**不删**，删在
+          写回时做，避免两个并发查询互相删对方刚写的结果）
+        """
+        cache = self.get("bedrock_cache", {})
+        if not isinstance(cache, dict):
+            return "miss", None
+        key = player_name.lower()
+        if key not in cache:
+            return "miss", None
+        data = cache.get(key) or {}
+        cached_at = data.get("cached_at", 0)
+        if (time.time() - cached_at) < self._bedrock_cache_ttl():
+            return "hit", data.get("uuid")
+        return "expired", None
+
+    def _write_bedrock_cache(self, player_name: str, uuid: Optional[str]) -> None:
+        """把查询结果写回缓存（**先重读**再改，不丢并发更新）。
+
+        为什么要重读：多个基岩名是**并发**查询的（``asyncio.gather``），
+        每个协程都在「读缓存 → await HTTP → 写缓存」之间让出控制权。
+        如果写回时用 await 之前拿到的**旧字典引用**去改，就会把别的
+        协程在这期间写入的条目**整块覆盖掉**（丢更新）。所以写回前
+        必须重新取一次当前缓存字典。
+        """
+        cache = self.get("bedrock_cache", {})
+        if not isinstance(cache, dict):
+            cache = {}
+        cache[player_name.lower()] = {
+            "uuid": uuid,
+            "cached_at": time.time(),
+            "player_name": player_name,  # 保存原始玩家名（大小写）
+        }
+        # __setitem__ 会触发一次 save()，这里再显式 save 一次是为了
+        # 「值没变（同一个 dict 引用）」时也保证落盘
+        self["bedrock_cache"] = cache
+        self.save()
+
+    def _fetch_bedrock_uuid_http(self, player_name: str) -> Optional[str]:
+        """**只做 HTTP 查询**（同步、阻塞；不碰缓存、不写 self）。
+
+        刻意做成「纯函数」：这样丢进线程池时**不会**碰到
+        ``self`` 的可变状态 → 线程安全。缓存的读-改-写由调用方在
+        **事件循环线程**里完成（见 ``_get_bedrock_player_uuid_async``）。
 
         Parameters
         ----------
@@ -361,47 +412,8 @@ class InactiveCheckSystem(BasicConfig, BasicSystem):
         Returns
         -------
         Optional[str]
-            玩家 UUID，失败返回 None
+            玩家 UUID；查不到（404）/ 出错返回 None
         """
-        # 获取缓存配置（默认缓存 6 个月，因为 UUID 不会经常变化）
-        # 6 个月 = 180 天 = 15,552,000 秒
-        cache_ttl = safe_int(self.config.get_keys(
-            ["system", "inactive_check", "bedrock_cache_ttl"], 15552000
-        ), 15552000)
-
-        # 检查缓存
-        bedrock_cache = self.get("bedrock_cache", {})
-        player_name_lower = player_name.lower()
-
-        if player_name_lower in bedrock_cache:
-            cache_data = bedrock_cache[player_name_lower]
-            cached_at = cache_data.get("cached_at", 0)
-            current_time = time.time()
-
-            # 检查缓存是否过期
-            if (current_time - cached_at) < cache_ttl:
-                # 缓存有效，直接返回
-                uuid = cache_data.get("uuid")
-                if uuid:
-                    self.logger.debug(
-                        f"使用缓存的基岩版玩家 {player_name} 的 UUID: {uuid}"
-                    )
-                    return uuid
-                else:
-                    # 缓存中标记为 None（之前查询失败），也直接返回 None
-                    self.logger.debug(
-                        f"使用缓存的基岩版玩家 {player_name} 的查询结果（无 UUID）"
-                    )
-                    return None
-            else:
-                # 缓存已过期，删除旧缓存
-                self.logger.debug(f"基岩版玩家 {player_name} 的缓存已过期，将重新获取")
-                del bedrock_cache[player_name_lower]
-                # 更新缓存字典以触发保存
-                self["bedrock_cache"] = bedrock_cache
-                self.save()
-
-        # 缓存不存在或已过期，调用 API
         url = f"https://mcprofile.io/api/v1/bedrock/gamertag/{player_name}"
 
         headers = {
@@ -416,51 +428,27 @@ class InactiveCheckSystem(BasicConfig, BasicSystem):
                 data = response.json()
 
                 # 优先使用 Floodgate UUID（用于 Floodgate 服务器）
-                uuid = None
                 if "floodgateuid" in data and data["floodgateuid"]:
                     uuid = data["floodgateuid"]
                     self.logger.debug(
                         f"获取到基岩版玩家 {player_name} 的 Floodgate UUID: {uuid}"
                     )
-                else:
-                    self.logger.debug(
-                        f"基岩版玩家 {player_name} 的 API 响应中未找到有效的 Floodgate UUID"
-                    )
-                    return None
+                    return uuid
 
-                # 保存到缓存
-                bedrock_cache[player_name_lower] = {
-                    "uuid": uuid,
-                    "cached_at": time.time(),
-                    "player_name": player_name,  # 保存原始玩家名（大小写）
-                }
-                self["bedrock_cache"] = bedrock_cache
-                self.save()
-                if uuid:
-                    self.logger.debug(f"已缓存基岩版玩家 {player_name} 的 UUID")
-                else:
-                    self.logger.debug(
-                        f"基岩版玩家 {player_name} 的 API 响应中未找到有效的 UUID"
-                    )
-
-                return uuid
-
-            elif response.status_code == 404:
-                # 玩家不存在，也记录到缓存（避免重复查询）
-                bedrock_cache[player_name_lower] = {
-                    "uuid": None,
-                    "cached_at": time.time(),
-                    "player_name": player_name,
-                }
-                self["bedrock_cache"] = bedrock_cache
-                self.save()
-                self.logger.debug(f"基岩版玩家 {player_name} 不存在于 MCProfile.io")
-                return None
-            else:
-                self.logger.warning(
-                    f"查询基岩版玩家 {player_name} 信息失败: HTTP {response.status_code}"
+                self.logger.debug(
+                    f"基岩版玩家 {player_name} 的 API 响应中未找到有效的 Floodgate UUID"
                 )
                 return None
+
+            if response.status_code == 404:
+                # 玩家不存在
+                self.logger.debug(f"基岩版玩家 {player_name} 不存在于 MCProfile.io")
+                return None
+
+            self.logger.warning(
+                f"查询基岩版玩家 {player_name} 信息失败: HTTP {response.status_code}"
+            )
+            return None
 
         except requests.exceptions.Timeout:
             self.logger.warning(f"查询基岩版玩家 {player_name} 信息超时")
@@ -472,16 +460,11 @@ class InactiveCheckSystem(BasicConfig, BasicSystem):
             self.logger.warning(f"解析基岩版玩家 {player_name} 信息时出错: {e}")
             return None
 
-    async def _get_bedrock_player_uuid_async(self, player_name: str) -> Optional[str]:
-        """查基岩版玩家 UUID 的**非阻塞**入口（协程专用）。
+    def _get_bedrock_player_uuid_blocking(self, player_name: str) -> Optional[str]:
+        """查缓存 + 阻塞式 HTTP 查询 + 回写缓存（**同步**，会阻塞线程）。
 
-        把同步阻塞的 HTTP 查询整体丢进线程池（默认 executor），事件
-        循环在查询期间**继续响应** QQ 消息 / 命令 / 其他任务。
-
-        修复前的问题：``_check_inactive_players`` 在 **MCDR 事件循环**
-        里直接调同步版 → 每次查询最长阻塞循环 **10 秒**，玩家数 ×
-        基岩名数量线性累加 → 期间所有 QQ 消息、命令、定时任务全部
-        停摆。
+        仅供**同步上下文**（如测试）使用；协程请用
+        :meth:`_get_bedrock_player_uuid_async`。
 
         Parameters
         ----------
@@ -493,10 +476,66 @@ class InactiveCheckSystem(BasicConfig, BasicSystem):
         Optional[str]
             玩家 UUID，失败返回 None
         """
+        status, uuid = self._read_bedrock_cache(player_name)
+        if status == "hit":
+            if uuid:
+                self.logger.debug(
+                    f"使用缓存的基岩版玩家 {player_name} 的 UUID: {uuid}"
+                )
+            else:
+                self.logger.debug(
+                    f"使用缓存的基岩版玩家 {player_name} 的查询结果（无 UUID）"
+                )
+            return uuid
+
+        uuid = self._fetch_bedrock_uuid_http(player_name)
+        self._write_bedrock_cache(player_name, uuid)
+        return uuid
+
+    async def _get_bedrock_player_uuid_async(self, player_name: str) -> Optional[str]:
+        """查基岩版玩家 UUID 的**非阻塞**入口（协程专用）。
+
+        把**阻塞的 HTTP 查询**丢进线程池（默认 executor），事件循环
+        在查询期间**继续响应** QQ 消息 / 命令 / 其他任务。
+
+        修复前的问题：``_check_inactive_players`` 在 **MCDR 事件循环**
+        里直接调同步版 → 每次查询最长阻塞循环 **10 秒**，玩家数 ×
+        基岩名数量线性累加 → 期间所有 QQ 消息、命令、定时任务全部
+        停摆。
+
+        **缓存的读-改-写刻意留在事件循环线程**（``_read_bedrock_cache``
+        / ``_write_bedrock_cache``），只有 HTTP 进线程池 → 线程里不碰
+        ``self`` 的可变状态，避免并发写盘互相踩踏。
+
+        Parameters
+        ----------
+        player_name : str
+            基岩版玩家名 (gamertag)
+
+        Returns
+        -------
+        Optional[str]
+            玩家 UUID，失败返回 None
+        """
+        status, uuid = self._read_bedrock_cache(player_name)
+        if status == "hit":
+            if uuid:
+                self.logger.debug(
+                    f"使用缓存的基岩版玩家 {player_name} 的 UUID: {uuid}"
+                )
+            else:
+                self.logger.debug(
+                    f"使用缓存的基岩版玩家 {player_name} 的查询结果（无 UUID）"
+                )
+            return uuid
+
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(
-            None, self._get_bedrock_player_uuid_blocking, player_name
+        uuid = await loop.run_in_executor(
+            None, self._fetch_bedrock_uuid_http, player_name
         )
+        # 写回缓存（事件循环线程；写前会重读缓存，不丢并发更新）
+        self._write_bedrock_cache(player_name, uuid)
+        return uuid
 
     async def _lookup_bedrock_uuids_concurrently(
         self, bedrock_names: list

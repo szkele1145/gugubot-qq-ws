@@ -64,7 +64,7 @@ class BotConfig(BasicConfig):
             )
 
         try:
-            with self.path.open("r", encoding="UTF-8") as f:
+            with self._open_for_read() as f:
                 data = yaml.load(f) if self.yaml_format else json.load(f)
         except (YAMLError, json.JSONDecodeError) as e:
             return False, f"配置文件语法错误（已保留原配置继续生效）: {e}"
