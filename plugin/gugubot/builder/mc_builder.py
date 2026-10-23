@@ -15,6 +15,29 @@ from gugubot.utils.message import strip_minecraft_color_codes
 from gugubot.utils.player_manager import PlayerManager
 
 
+def _san(text) -> str:
+    """剥掉用户可控文本里的 MC 颜色/格式码（``§a``、``§l`` 等）。
+
+    为什么所有进入 MC 渲染的文本都要过这里
+    --------------------------------------
+    ``RText``（以及 tellraw 的 text 组件）最终由 **MC 客户端**渲染，``§``
+    照样生效。而本项目里大量文本来自**用户可控输入**：QQ 昵称、群名片、
+    消息正文、群公告、分享卡片标题、图片说明、绑定后的游戏名……
+
+    一个用户把昵称改成 ``§c§l管理员`` 就能让聊天行显示成红色粗体的
+    「管理员:」→ **伪造格式、冒充管理/系统发言**。``§`` 是可打印字符，
+    靠 ``str.isprintable()`` 过滤拦不住（历史缺陷 #94 / #95）。
+
+    所以统一在**构造 RText 的入口**脱敏，而不是指望每个调用方都记得。
+    """
+    return strip_minecraft_color_codes(str(text) if text is not None else "")
+
+
+def _rt(text, **kwargs) -> RText:
+    """构造 RText 并自动脱敏（用户可控文本一律走这里）。"""
+    return RText(_san(text), **kwargs)
+
+
 class McMessageBuilder(BasicBuilder):
     """Message Builder for Minecraft(via MCDR - RText)"""
 
@@ -79,11 +102,11 @@ class McMessageBuilder(BasicBuilder):
             player_name = _get_player_name(qq_id)
             # If the player name is all, do not create hover text and click event
             if player_name.strip() == "all":
-                return RText(f"[@{player_name}]", color=RColor.aqua)
+                return _rt(f"[@{player_name}]", color=RColor.aqua)
 
             return (
-                RText(f"[@{player_name}]", color=RColor.aqua)
-                .set_hover_text(f"点击草稿 @{player_name} 的消息")
+                _rt(f"[@{player_name}]", color=RColor.aqua)
+                .set_hover_text(_san(f"点击草稿 @{player_name} 的消息"))
                 .set_click_event(
                     action=RAction.suggest_command, value=f"[CQ:at,qq={qq_id}]"
                 )
@@ -106,7 +129,7 @@ class McMessageBuilder(BasicBuilder):
             text = data["text"]
             if low_game_version:
                 text = McMessageBuilder.replace_emoji_with_placeholder(text)
-            return RText(text)
+            return _rt(text)
 
         def _process_contact(data: Dict[str, str]) -> RText:
             """Process contact"""
@@ -131,7 +154,7 @@ class McMessageBuilder(BasicBuilder):
                     text = base64.b64decode(mannounce.get("text", "")).decode("utf-8")
                 except (ValueError, TypeError):
                     text = ""
-                return RText(f"[群公告:{text}]" if text else "[群公告]")
+                return _rt(f"[群公告:{text}]" if text else "[群公告]")
 
             # 小程序/链接/视频等分享卡片
             detail = card.get("meta", {}).get("detail_1", {})
@@ -141,15 +164,15 @@ class McMessageBuilder(BasicBuilder):
                 link = f"https://{link}"
 
             if title:
-                result = RText(f"[分享:{title}]", color=RColor.gold)
+                result = _rt(f"[分享:{title}]", color=RColor.gold)
                 if link:
-                    result = result.set_hover_text(link).set_click_event(
+                    result = result.set_hover_text(_san(link)).set_click_event(
                         action=RAction.open_url, value=link
                     )
                 return result
 
             prompt = card.get("prompt", "")
-            return RText(prompt) if prompt else RText("[链接分享]")
+            return _rt(prompt) if prompt else RText("[链接分享]")
 
         process_functions = {
             "at": _process_at,
@@ -232,7 +255,7 @@ class McMessageBuilder(BasicBuilder):
         if receiver is not None:
             receiver = strip_minecraft_color_codes(receiver)
 
-        rtext = RText(f"[{group_name}]", color=RColor.gold)
+        rtext = _rt(f"[{group_name}]", color=RColor.gold)
 
         # If the group ID exists, set the group hover text and click event
         if group_id is not None:
@@ -243,7 +266,7 @@ class McMessageBuilder(BasicBuilder):
         # If the sender exists, add the sender text and click event
         if sender is not None:
             rtext += (
-                RText(f" [{sender}]", color=RColor.green)
+                _rt(f" [{sender}]", color=RColor.green)
                 .set_hover_text(f"点击草稿 @{sender} 的消息")
                 .set_click_event(
                     action=RAction.suggest_command,
@@ -253,14 +276,14 @@ class McMessageBuilder(BasicBuilder):
 
         # If the receiver exists, add the receiver text
         if receiver is not None:
-            rtext += RText(f"[@{receiver}]", color=RColor.aqua)
+            rtext += _rt(f"[@{receiver}]", color=RColor.aqua)
 
         rtext += RText(" ")
 
         if isinstance(forward_content, RTextBase):
             rtext += forward_content
         else:
-            rtext += RText(f"{forward_content}", color=RColor.white)
+            rtext += _rt(forward_content, color=RColor.white)
 
         return rtext
 
@@ -280,7 +303,7 @@ class McMessageBuilder(BasicBuilder):
         if low_game_version:
             emoji = McMessageBuilder.replace_emoji_with_placeholder(emoji)
 
-        return RText(f"[表情:{emoji}]") if emoji else RText("[表情]")
+        return _rt(f"[表情:{emoji}]") if emoji else RText("[表情]")
 
     @staticmethod
     def process_image(
@@ -313,19 +336,19 @@ class McMessageBuilder(BasicBuilder):
 
         # If the image uses ChatImage plugin to preview, convert the image text to CICode
         if chat_image:
-            result = RText(f'[[CICode,url={image_link},name={summary or "图片"}]]')
+            result = _rt(f'[[CICode,url={image_link},name={summary or "图片"}]]')
         else:
-            result = RText(text, color=RColor.gold)
+            result = _rt(text, color=RColor.gold)
 
         # If the image uses ImagePreview plugin to preview, set the image hover text and
         #   click event to ImagePreview format.
         if image_previewer:
-            result = result.set_hover_text(image_link).set_click_event(
+            result = result.set_hover_text(_san(image_link)).set_click_event(
                 RAction.run_command, f"/imagepreview preview {image_link} 60"
             )
         # If the image link exists, set the image hover text and click event to open link
         elif image_link:
-            result = result.set_hover_text(image_link).set_click_event(
+            result = result.set_hover_text(_san(image_link)).set_click_event(
                 action=RAction.open_url, value=image_link
             )
 

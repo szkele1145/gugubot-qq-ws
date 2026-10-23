@@ -193,21 +193,127 @@ def test_build_keeps_normal_content(monkeypatch):
     assert "你好世界" in joined
 
 
-# ==================================================== 4. 非颜色码的 § 保留
-def test_build_keeps_non_color_paragraph(monkeypatch):
-    """``§x``（非合法格式码）不该被误删 —— 只在 § 后跟格式字符时才剥。"""
+# ==================================================== 5. 系统性覆盖：所有用户可控文本
+def _array(*segs):
+    return list(segs)
+
+
+def test_array_text_segment_stripped(monkeypatch):
+    rec = _Recorder().install(monkeypatch)
+    mc_builder.McMessageBuilder.array_to_rtext(
+        _array({"type": "text", "data": {"text": "§c正文§r内容"}})
+    )
+    joined = _joined(rec)
+    assert "§" not in joined, f"消息正文段的 § 没被剥: {rec.texts}"
+    assert "正文内容" in joined
+
+
+def test_at_segment_name_stripped(monkeypatch):
+    """@ 段显示的玩家名（可能是 QQ 昵称/游戏名）也必须脱敏。"""
     rec = _Recorder().install(monkeypatch)
 
-    mc_builder.McMessageBuilder.build(
-        "正文",
-        group_name="A§x群",
-        group_id=None,
-        sender=None,
-        sender_id=None,
-        receiver=None,
+    class _PM:
+        def get_player(self, identifier, platform=None, name_only=False):
+            return types.SimpleNamespace(name="§c§l管理员")
+
+    mc_builder.McMessageBuilder.array_to_rtext(
+        _array({"type": "at", "data": {"qq": "12345"}}),
+        player_manager=_PM(),
     )
-    assert "A§x群" in _joined(rec), (
-        f"误删了非格式码的 §（可能把正常文本改坏）: {rec.texts}"
+    joined = _joined(rec)
+    assert "§" not in joined, f"@ 段里的昵称没被剥: {rec.texts}"
+    assert "管理员" in joined
+
+
+def test_announcement_card_stripped(monkeypatch):
+    """群公告卡片正文（base64 编码在 meta.mannounce.text）也必须脱敏。"""
+    import base64
+    import json as _json
+
+    rec = _Recorder().install(monkeypatch)
+    body = base64.b64encode("§4紧急公告§r：停机".encode()).decode()
+    card = _json.dumps({"app": "com.tencent.mannounce",
+                        "meta": {"mannounce": {"text": body}}})
+
+    mc_builder.McMessageBuilder.array_to_rtext(
+        _array({"type": "json", "data": {"data": card}})
+    )
+    joined = _joined(rec)
+    assert "§" not in joined, f"群公告正文的 § 没被剥: {rec.texts}"
+    assert "紧急公告" in joined
+
+
+def test_share_title_stripped(monkeypatch):
+    import json as _json
+
+    rec = _Recorder().install(monkeypatch)
+    card = _json.dumps({
+        "meta": {"detail_1": {"desc": "§e标题§r", "qqdocurl": "example.com"}}
+    })
+    mc_builder.McMessageBuilder.array_to_rtext(
+        _array({"type": "json", "data": {"data": card}})
+    )
+    joined = _joined(rec)
+    assert "§" not in joined, f"分享卡片标题的 § 没被剥: {rec.texts}"
+    assert "标题" in joined
+
+
+def test_image_summary_stripped(monkeypatch):
+    rec = _Recorder().install(monkeypatch)
+    mc_builder.McMessageBuilder.array_to_rtext(
+        _array({"type": "image", "data": {
+            "url": "https://x/y.png", "summary": "§c说明",
+        }})
+    )
+    joined = _joined(rec)
+    assert "§" not in joined, f"图片说明里的 § 没被剥: {rec.texts}"
+    assert "说明" in joined
+
+
+def test_no_raw_rtext_with_dynamic_text():
+    """结构性断言：``RText`` 只能接**字符串字面量**或 ``_san(...)``。
+
+    动态文本（f-string 插值、变量、函数返回值）一律走 ``_rt`` —— 这样
+    「所有进入 MC 渲染的用户可控文本都被脱敏」就是**结构上**成立的，
+    而不是靠每个调用点自觉。
+
+    本断言替代了「逐处人工确认」，能在新增代码时立刻报警。
+    """
+    import ast
+
+    src = (_ROOT / "plugin" / "gugubot" / "builder" / "mc_builder.py"
+           ).read_text(encoding="utf-8-sig")
+    tree = ast.parse(src)
+
+    offenders = []
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "RText"
+        ):
+            continue
+        if not node.args:
+            continue
+        arg = node.args[0]
+
+        def _safe(a) -> bool:
+            """字符串字面量、或 _san(...)、或两个分支都是字面量的三元表达式。"""
+            if isinstance(a, ast.Constant) and isinstance(a.value, str):
+                return True
+            if isinstance(a, ast.Call) and isinstance(a.func, ast.Name):
+                return a.func.id == "_san"
+            if isinstance(a, ast.IfExp):
+                return _safe(a.body) and _safe(a.orelse)
+            return False
+
+        if not _safe(arg):
+            offenders.append((node.lineno, ast.get_source_segment(src, node) or ""))
+
+    assert not offenders, (
+        "以下 RText 构造接了动态文本却没走 _rt/_san（用户可控 § 会直接进入"
+        "MC 渲染 → 可伪造格式、冒充管理员）:\n"
+        + "\n".join(f"  L{ln}: {seg[:90]}" for ln, seg in offenders)
     )
 
 
