@@ -78,6 +78,41 @@ class QQOfficialClient:
     # 基础请求
     # ------------------------------------------------------------------ #
 
+    @staticmethod
+    def _is_retry_safe(method: str, payload, exc: Exception) -> bool:
+        """网络异常后重试是否安全（不会造成重复副作用）。
+
+        判据分两段：
+
+        1. **失败发生在哪个阶段**。连接阶段失败（`ConnectTimeout` /
+           `ConnectionError`）= 请求根本没送达 → 任何请求都可安全重试。
+           读超时（`ReadTimeout`）意味着请求**可能已被服务端处理**。
+        2. **请求是否幂等/带去重键**。GET 天然幂等；消息发送只有带
+           `msg_id` 或 `event_id`（被动回复）时官方才按
+           ``msg_id + msg_seq`` 去重。
+
+        所以：**主动消息遇到读超时不能重试** —— 它没有去重键，重试会让
+        群里出现两条一模一样的消息。
+        """
+        method = (method or "").upper()
+        # ① 连接阶段失败：请求未送达，重试安全
+        if isinstance(
+            exc,
+            (
+                requests.exceptions.ConnectTimeout,
+                requests.exceptions.ConnectionError,
+            ),
+        ):
+            return True
+        # ② 其余（读超时等）：只允许幂等请求
+        if method == "GET":
+            return True
+        if isinstance(payload, dict) and (
+            payload.get("msg_id") or payload.get("event_id")
+        ):
+            return True
+        return False
+
     def _headers(self) -> dict:
         headers = self._token.auth_header()
         headers["Content-Type"] = "application/json"
@@ -117,7 +152,17 @@ class QQOfficialClient:
                 timeout=self._timeout,
             )
         except requests.RequestException as e:
-            if _net_attempt < 1:
+            # 是否重试要按「幂等性 + 失败发生在哪个阶段」判断。
+            #
+            # 读超时（ReadTimeout）的语义是「请求**可能已经被服务端处理**，
+            # 只是响应没等到」。此时重试：
+            #   * 被动回复（带 msg_id / event_id）→ 官方按 msg_id+msg_seq
+            #     去重，安全；
+            #   * **主动消息（无去重键）→ 群里出现两条一模一样的消息**。
+            #
+            # 连接阶段失败（ConnectTimeout / ConnectionError）= 请求**未送达**
+            # → 任何请求都可以安全重试。
+            if _net_attempt < 1 and self._is_retry_safe(method, payload, e):
                 time.sleep(1)
                 return self._request(
                     method, path, payload, params,
