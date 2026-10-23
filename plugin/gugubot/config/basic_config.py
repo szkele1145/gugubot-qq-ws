@@ -138,31 +138,26 @@ class BasicConfig(dict):
                 raise
 
     def _install_tmp(self, tmp_path: Path) -> None:
-        """把临时文件装到位（原子替换），Windows 被占用时逐级降级。
+        """把临时文件装到位（原子替换），Windows 被占用时退避重试。
 
         降级链：
 
         1. ``os.replace``（原子，优先）
         2. 退避重试（读者窗口通常只有几毫秒）
-        3. 删除目标文件后再 rename（非原子，但比重试到底失败强）
 
-        **刻意不降级到「直接写目标文件」**：那样会牺牲原子性 ——
-        目标文件写到一半时崩机会留下**半截文件**（而原子替换最坏是
-        保留旧文件）。而且读者恰好在写入窗口里读，就会读到半截内容
-        → JSON/YAML 解析失败。**「保存失败」比「文件损坏」安全得多**
-        —— 前者用户会重试并看到报错，后者数据静默丢失。
+        **不做「先删目标文件再 rename」的降级**：那一步在 rename 仍失败
+        时（tmp 被杀软锁住 / 跨卷 / 目标目录权限变化）会**把旧文件一起
+        删掉** → 配置凭空消失，「保存失败」被升级成「数据丢失」。占用
+        是瞬时的，退避重试足够；真失败就抛错并**保留旧文件**。
+
+        **也不降级到「直接写目标文件」**：那会牺牲原子性 —— 目标文件
+        写到一半时崩机会留下**半截文件**（原子替换最坏是保留旧文件），
+        而读者恰好在写入窗口里读就会读到半截内容 → JSON/YAML 解析失败。
+        **「保存失败」比「文件损坏」安全得多** —— 前者用户会重试并看到
+        报错，后者数据静默丢失。
         """
         try:
             self._atomic_replace(tmp_path, self.path)
-            return
-        except PermissionError:
-            pass
-
-        # 降级：先删目标再 rename
-        try:
-            if self.path.exists():
-                os.remove(self.path)
-            os.replace(tmp_path, self.path)
             return
         except (PermissionError, OSError) as e:
             raise OSError(

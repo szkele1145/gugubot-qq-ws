@@ -19,13 +19,30 @@ QQ 官方开放平台出于隐私只下发 openid（形如 ``XXXXXX`` 的不透�
 from __future__ import annotations
 
 import json
+import os
 import threading
+import time
 from pathlib import Path
 from typing import Dict, Optional
 
 # 虚拟号码起始段（12 位数字，避免与真实 QQ 号/QQ 群号冲突）
 _BASE_USER = 100_000_000_000
 _BASE_GROUP = 200_000_000_000
+
+# 落盘重试参数。
+#
+# **为什么必须重试**：Windows 上只要还有别的进程/线程开着目标文件
+# （编辑器、备份脚本、杀软扫描、另一个插件实例），``os.replace`` 就会
+# 抛 ``PermissionError``（WinError 32）。Linux 无此问题，所以本地开发
+# 发现不了。旧实现一次失败就只打一行 warning 放弃 → 映射**静默丢失**
+# → 重启后 ``_next_user`` 回退 → 新 openid 复用已分配的虚拟号 →
+# 下游（白名单/绑定/投票/待办）里存的旧虚拟号全部指向错误的人。
+_REPLACE_RETRIES = 12
+_REPLACE_BACKOFF = 0.02
+_REPLACE_BACKOFF_MAX = 0.5
+
+# 去抖写盘失败后的重新排队次数（退避递增，总量有界）
+_FLUSH_RETRIES = 5
 
 
 class QQIDMapper:
@@ -56,6 +73,8 @@ class QQIDMapper:
 
         # 合并写状态
         self._flush_pending = False
+        # 唯一临时文件名用的自增序号（见 _make_tmp_path）
+        self._tmp_counter = 0
 
         # 运行期临时状态（不持久化，实例隔离）
         self._pending_legacy_groups: list = []
@@ -69,11 +88,17 @@ class QQIDMapper:
     # ------------------------------------------------------------------ #
 
     def _load(self) -> None:
-        # 清理上次崩溃可能残留的 tmp 文件（rename 原子写的中间产物）
+        # 清理上次崩溃可能残留的 tmp 文件（rename 原子写的中间产物）。
+        # 临时文件名现在是唯一化的（pid + 线程 id + 序号），所以按通配
+        # 清理；同时兼容旧版固定名 ``<data>.json.tmp``。
         try:
-            tmp = self._data_file.with_suffix(".json.tmp")
-            if tmp.exists():
-                tmp.unlink()
+            for stale in self._data_file.parent.glob(
+                self._data_file.name + ".*.tmp"
+            ):
+                stale.unlink()
+            legacy_tmp = self._data_file.with_suffix(".json.tmp")
+            if legacy_tmp.exists():
+                legacy_tmp.unlink()
         except Exception:
             pass
         if not self._data_file or not self._data_file.exists():
@@ -171,26 +196,35 @@ class QQIDMapper:
             # 发错人）。这里直接写，不走 0.2s 去抖——加载期只有一次。
             self._write_file()
 
-    def _save(self) -> None:
+    def _save(self, _retry: int = 0) -> None:
         """合并写：标记脏 + 0.2s 去抖统一落盘。
 
         场景：@ 原位展开会让一条消息触发多个新 openid 的映射注册
         （@ 三个新人 = 三次全量 JSON dump）。去抖窗口内合并为一次
         写盘；**flush()（插件卸载）与进程退出前已覆盖 _write_file
-        保证最终落盘**。窗口极短（0.2s），崩溃丢失风险可忽略。
+        保证最终落盘**。
+
+        **写盘失败时会重新排队**（最多 ``_FLUSH_RETRIES`` 次，退避递增）：
+        否则一次瞬时占用就让这次映射永久丢失。
         """
         with self._lock:
             if self._flush_pending:
                 return  # 已有待写盘任务
             self._flush_pending = True
 
+        # 首次 0.2s（合并 @ 展开的连续注册）；失败重排时指数退避
+        delay = 0.2 if _retry == 0 else min(0.2 * (2 ** _retry), 5.0)
+
         def _delayed_write():
             with self._lock:
                 # 窗口内可能又有新映射，一并写入
                 self._flush_pending = False
-                self._write_file()
+                ok = self._write_file()
+            if not ok and _retry < _FLUSH_RETRIES:
+                # 写盘失败（Windows 文件占用）→ 重新排队，别把这次改动丢了
+                self._save(_retry + 1)
 
-        t = threading.Timer(0.2, _delayed_write)
+        t = threading.Timer(delay, _delayed_write)
         t.daemon = True
         t.start()
 
@@ -200,10 +234,57 @@ class QQIDMapper:
             self._flush_pending = False
             self._write_file()
 
-    def _write_file(self) -> None:
-        """真正写盘（须持锁调用；tmp 文件原子替换）。"""
+    def _make_tmp_path(self) -> Path:
+        """生成**每次调用都不同**的临时文件路径。
+
+        旧实现用固定名 ``<data>.json.tmp``：多个实例（或同一进程里的
+        两个 mapper）并发写时会**共用同一个 tmp**，互相截断 → ``replace``
+        可能搬走**半截 JSON**。与 #72（BasicConfig 并发写盘）完全同类。
+        """
+        self._tmp_counter += 1
+        return self._data_file.with_name(
+            f"{self._data_file.name}."
+            f"{os.getpid()}.{threading.get_ident()}.{self._tmp_counter}.tmp"
+        )
+
+    def _replace_with_retry(self, tmp: Path, target: Path) -> None:
+        """``tmp.replace(target)`` + 递增退避重试（Windows 文件占用）。
+
+        **刻意不做「先删目标再 rename」的降级**：那一步在 ``replace``
+        仍然失败时会**把目标文件删掉**（测试实测：数据文件直接消失，
+        只剩一个空目录）。占用是瞬时的，靠退避重试即可；真失败就
+        **保留旧文件**——「这次没保存成功」远好于「映射表没了」。
+        调用方（``_write_file``）返回 False 后由 ``_save()`` 重新排队。
+        """
+        delay = _REPLACE_BACKOFF
+        last_exc: Optional[BaseException] = None
+        for attempt in range(_REPLACE_RETRIES):
+            try:
+                tmp.replace(target)
+                return
+            except OSError as e:
+                last_exc = e
+                if not isinstance(e, PermissionError):
+                    # 非占用类错误（磁盘满、路径不存在）重试无意义
+                    raise
+                if attempt == _REPLACE_RETRIES - 1:
+                    break
+                time.sleep(delay)
+                delay = min(delay * 2, _REPLACE_BACKOFF_MAX)
+
+        if last_exc is not None:
+            raise last_exc
+        raise OSError(f"无法写入 {target}")
+
+    def _write_file(self) -> bool:
+        """真正写盘（须持锁调用）。返回**是否成功**。
+
+        返回值很重要：``_save()`` 的去抖线程据此决定要不要重新排队重试
+        —— 旧实现把失败吞成一行 warning，映射就**静默丢了**。
+        """
         if not self._data_file:
-            return
+            return True
+        tmp = self._make_tmp_path()
         try:
             self._data_file.parent.mkdir(parents=True, exist_ok=True)
             payload = {
@@ -215,13 +296,21 @@ class QQIDMapper:
                 "next_user": self._next_user,
                 "next_group": self._next_group,
             }
-            tmp = self._data_file.with_suffix(".json.tmp")
             with tmp.open("w", encoding="utf-8") as f:
                 json.dump(payload, f, ensure_ascii=False, indent=1)
-            tmp.replace(self._data_file)
+            self._replace_with_retry(tmp, self._data_file)
+            return True
         except Exception as e:
             if self._logger:
                 self._logger.warning(f"[QQ官方] 保存 ID 映射文件失败: {e}")
+            return False
+        finally:
+            # 无论成功失败都不留半成品（成功时 tmp 已被 rename 走）
+            try:
+                if tmp.exists():
+                    tmp.unlink()
+            except OSError:
+                pass
 
     # ------------------------------------------------------------------ #
     # 用户 openid
