@@ -64,8 +64,7 @@ class VoteSystem(BasicSystem):
         """
         super().__init__("vote", enable=False, config=config)
         self.server = server
-        self.player_manager = PlayerManager(server, self)
-        self.player_manager.load()
+        self.player_manager = PlayerManager.get_instance(server, self)
         self.vote_manager = VoteManager(server)
         self.vote_type_registry = VoteTypeRegistry()
 
@@ -1088,8 +1087,18 @@ class VoteSystem(BasicSystem):
             f"征求模式: {consult_mode}"
         )
 
-        # 发起投票前从磁盘重新加载最新绑定数据，确保资格名单是最新的。
-        self.player_manager.load()
+        # 资格名单取自 PlayerManager（**全局单例**，与 bound 系统共用同一份
+        # 内存）→ 玩家刚绑定完，这里立刻就能看到。
+        #
+        # 旧实现在这里 ``self.player_manager.load()``，注释写的是「从磁盘
+        # 重新加载最新绑定数据，确保资格名单是最新的」—— 但那时的
+        # PlayerManager 与 bound 系统的**是两个独立实例**（各自一份内存
+        # 副本），load 只能读到**磁盘**状态，看不到 bound 内存里尚未
+        # 落盘的修改；而两个实例的 load 时刻不同步 → 资格名单依然可能
+        # 是旧的 → 玩家明明刚绑定却被判「无投票资格」。
+        #
+        # 现在是单例，内存天然一致，**不需要也不应该**再 load —— load
+        # 会把内存重置成磁盘内容，反而丢掉尚未落盘的绑定改动。
 
         # 获取所有在线玩家的绑定信息
         eligible_voters = await self._get_eligible_voters()

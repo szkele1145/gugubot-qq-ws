@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 # +----------------------------------------------------------------------+
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
@@ -47,7 +48,66 @@ class Player:
 
 
 class PlayerManager(BasicConfig):
-    """玩家管理器"""
+    """玩家管理器。
+
+    **同一路径只允许存在一个实例**（按解析后的绝对路径做单例）——
+    ``bound.py`` 与 ``vote.py`` 都会构造它，而它们指向**同一个**
+    ``players.json``。两个独立实例 → 两份内存副本**分裂**：
+
+    * ``bound.py`` 刚给玩家绑上 QQ（内存已改、已落盘）
+    * ``vote.py`` 的实例内存仍是**旧快照** → 发起投票时用它算
+      「资格名单」→ 用户明明刚绑定，却被判「**无投票资格**」
+
+    旧实现靠「每次发起投票都 ``load()`` 一次」来绕开分裂，但那只能
+    保证「磁盘状态」，看不到**另一个实例内存里尚未落盘**的修改，而且
+    两个实例的 load 时刻不同步 → 资格名单依然可能是旧的。
+
+    单例后：绑定改动对所有消费者**立即可见**，且 ``load()`` 的调用
+    也可以收敛（``vote.py`` 里那两处 ``load()`` 变成纯保险）。
+    """
+
+    # 路径 -> 实例（进程内共享）
+    _instances: Dict[str, "PlayerManager"] = {}
+    _instances_lock = threading.Lock()
+
+    @classmethod
+    def get_instance(
+        cls, server: PluginServerInterface, bound_system
+    ) -> "PlayerManager":
+        """取（并按需创建）该数据目录对应的**唯一** PlayerManager。
+
+        同一路径只允许存在一个实例 —— ``bound.py`` 与 ``vote.py`` 都要用
+        玩家绑定数据，而它们指向**同一个** ``players.json``。两个独立
+        实例 → 两份内存副本**分裂**：
+
+        * ``bound.py`` 刚给玩家绑上 QQ（内存已改、已落盘）
+        * ``vote.py`` 的实例内存仍是**旧快照** → 发起投票时用它算
+          「资格名单」→ 用户明明刚绑定，却被判「**无投票资格**」
+
+        旧实现靠「每次发起投票都 ``load()`` 一次」来绕开分裂，但那只能
+        保证「磁盘状态」，看不到**另一个实例内存里尚未落盘**的修改，而且
+        两个实例的 load 时刻不同步 → 资格名单依然可能是旧的。
+
+        单例后：绑定改动对所有消费者**立即可见**。
+        """
+        data_path = Path(server.get_data_folder()) / "system" / "players.json"
+        key = str(data_path.absolute())
+        with cls._instances_lock:
+            inst = cls._instances.get(key)
+            if inst is None:
+                inst = cls(server, bound_system)
+                cls._instances[key] = inst
+            else:
+                # 已存在 → 复用，但**保留第一个构造者**的 bound_system：
+                # 语义上它才是「绑定系统」（vote 只是借用来读全局 config）。
+                # 覆盖会让 vote 顶替 bound，将来若 bound_system 上新增了
+                # 只有 bound 才有的东西（如 system_manager 的特定用法），
+                # 就会静默 AttributeError。
+                #
+                # 只刷新 server / logger（热重载时 server 对象可能换新）。
+                inst.server = server
+                inst.logger = server.logger
+            return inst
 
     def __init__(self, server: PluginServerInterface, bound_system):
         self.server = server
@@ -63,10 +123,31 @@ class PlayerManager(BasicConfig):
         super().__init__(path=str(data_path), default_content={}, yaml_format=True)
 
     def load(self) -> None:
-        """加载玩家数据"""
+        """加载玩家数据（**整份替换**，不是合并）。
+
+        旧实现用 ``super().load()``（``update()`` 语义、**不 clear**）
+        + ``_players`` 只增不减 → **刷不干净**：
+
+        * 磁盘上已 ``remove_player()`` 删掉的玩家**残留在内存** →
+          ``get_player()`` 依然能找到他 → **已解绑用户仍在投票资格
+          名单里**；
+        * 内存里**尚未落盘**的修改会被磁盘旧值**覆盖**（丢更新）；
+        * ``_players`` 里攒下磁盘上早已不存在的**僵尸 Player** →
+          ``get_all_players()`` 会把它们算进去 → 未绑定检查 / 不活跃
+          检查会遍历到不存在的玩家。
+
+        现在改成：先把 dict 层**整体替换**成磁盘内容，再**重建**
+        ``_players`` 快照（不多不少）。
+        """
+        # 先把旧内容清掉：BasicConfig.load() 是 update() 语义，会把磁盘
+        # 上已删除的键留在内存里
+        self.clear()
         super().load()
-        # 转换数据为Player对象
+        # 重建 Player 快照（先清空，避免僵尸条目残留）
+        self._players.clear()
         for name, data in self.items():
+            if not isinstance(data, dict):
+                continue
             self._players[name] = Player(
                 name=name,
                 java_name=data.get("java_name", []),

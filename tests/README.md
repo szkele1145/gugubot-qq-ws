@@ -1,4 +1,4 @@
-# 测试套件
+﻿# 测试套件
 
 GUGUBot 官方直连改造版的自动化测试（全部独立可跑，无需真实 QQ 账号）。
 
@@ -7,7 +7,7 @@ GUGUBot 官方直连改造版的自动化测试（全部独立可跑，无需真
 ```powershell
 $env:PYTHONIOENCODING = "utf-8"
 
-# 一次性跑全部 pytest 用例（当前 423 项，约 62s；含 16 个独立脚本的自动执行）
+# 一次性跑全部 pytest 用例（当前 429 项，约 48s；含 16 个独立脚本的自动执行）
 python -m pytest tests/ -q
 
 # 也可以直接 `python -m pytest`（仓库根有 pytest.ini，testpaths=tests）
@@ -55,6 +55,7 @@ python tests\test_lang_orphans.py       # 语言包孤儿键 / 单边漏译反�
 | test_qq_official_ws_session.py | **官方 WS 会话失效与回调签名探测（v2.2.10 续，18 项）**：① op:9（INVALID_SESSION）的 `d` 判定写的是 `d_val is False` → 只认**恰好是布尔 False** 的对象，官方若下发字符串 `"false"` / 数字 `0` 则**漏判** → 走「保留 session 等下个 Hello 重试 Resume」→ 拿已被官方判死的 session 反复 Resume → 死循环；现按「显式假值」统一判定；② op:9 后**只清字段不重连** → Identify 永远发不出去（Identify 只在新连接的 Hello 之后发）→ 连接看似还在、实则已死，只能等心跳失活兜底（官方心跳间隔最长 300s → 最坏离线近 10 分钟）；现 op:9 主动触发重连；③ 回调签名探测靠「先试 4 参、捕获 TypeError 再退回 3 参」→ 回调**内部**的业务 TypeError（文案含 "argument"/"positional"）会被误判成旧签名 → **同一事件被处理两次**；现改用 `inspect.signature` 静态求值，不依赖任何异常 |
 | test_inactive_check_blocking_http.py | **不活跃检查的同步 HTTP 阻塞事件循环（v2.2.10 续，2 项）**：`logic/plugins/inactive_check.py` 的 `_get_bedrock_player_uuid` 用**同步**的 `requests.get(url, timeout=10)` 查 mcprofile.io，而它在 `_check_inactive_players` 里是**串行**调用（`for bedrock_name in player.bedrock_name`）→ 整条链跑在 **MCDR 事件循环**上、中间**没有** `run_in_executor` → 一次查询最长**阻塞循环 10 秒**、玩家数 × 基岩名数量**线性累加** → 阻塞期间 **MCDR 事件循环完全停摆**，QQ 消息、命令、其他定时任务全部排队。这是典型的「在 async 函数里调同步阻塞 IO」。修复：把「查缓存 + HTTP + 回写缓存」整体收敛成**一个同步函数** `_get_bedrock_player_uuid_blocking`（缓存的读-改-写因此在 executor 线程里是连续的），新增 **async** 包装 `_get_bedrock_player_uuid_async`（经 `loop.run_in_executor` 丢线程池），玩家循环改走 `_lookup_bedrock_uuids_concurrently`（`asyncio.gather` 并发）→ 总耗时由「所有之和」降为「最慢的一个」。测试：① **AST 静态断言**（协程不得直接调用含 `requests.get` 的同步函数 —— 覆盖 `f(...)` 与 `self.f(...)` 两种调用形态）；② **运行时断言**（把 `requests.get` 换成「睡 0.3 秒」的假实现，同时跑一个心跳协程，断言**查询期间心跳至少跳 3 拍**；阻塞版是 **0 拍**）。判定刻意用「拍数」而非「耗时」—— Windows 定时器分辨率会让 `asyncio.sleep(0.02)` 实际睡 ~31ms，耗时断言会假失败 |
 | test_basic_config_concurrent_save.py | **BasicConfig 并发写盘安全 + 基岩缓存并发不丢更新（v2.2.10 续，5 项）**：两个真实缺陷，一个是历史遗留、一个是 #71 修复引入的。**A. 固定名临时文件**：`BasicConfig.save()` 用固定 tmp 名（`path.tmp`）且无锁 → save 会被**多线程**并发调用（事件循环线程 + 线程池线程），共用 tmp 名时两个线程写到同一文件 → 互相截断 → `os.replace` 搬走**半截文件** → **配置/玩家数据损坏且不可恢复**；`json.dump(dict(self))` 在 dict 被并发修改时还会抛 "dictionary changed size during iteration"。**B. 缓存丢更新**（#71 修复引入）：多个基岩名并发查询（`asyncio.gather`）时，每个协程都在「读缓存 → await HTTP → 写缓存」之间让出控制权；写回时若用 await 前拿到的**旧字典引用**，会把别的协程刚写入的条目**整块覆盖掉**。修复：A → `save()` 加 `RLock` + **每次唯一** tmp 名（pid + 线程 id + 自增序号）+ Windows 上 `os.replace` 撞并发读者的**递增退避重试**（~10s 窗口）+ 「先删再 rename」降级 + 失败清理 tmp；读侧 `_open_for_read` 同样带退避重试（MCDR 热重载撞上保存窗口不再报「重载失败」）。**刻意不降级到「直接写目标文件」**——那会牺牲原子性，读者会读到半截内容，**「保存失败」远比「文件损坏」安全**。B → HTTP 单独抽成纯函数 `_fetch_bedrock_uuid_http` 丢线程池（线程里不碰 `self` 的可变状态），缓存的读-改-写**留在事件循环线程**且写回前**重读**当前缓存字典。测试：两个 AST 静态断言（tmp 名唯一成分、save 持锁）+ 8 线程 × 40 轮并发 save 时持续裸读（读到的一律是完整 JSON，半截即败）+ 插件自身读路径在 200 轮并发保存下零失败 + 两个并发查询的缓存条目**都**在（丢更新版本只剩一个） |
+| test_player_manager_load_refresh.py | **PlayerManager 单例 + load() 整份刷新（v2.2.10 续，6 项）**：`bound.py` 与 `vote.py` 各自 `PlayerManager(server, self)` → **两个独立实例指向同一个 `players.json`** → 内存副本**分裂**。后果：bound 刚给玩家绑上 QQ，vote 的实例内存还是**旧快照** → 发起投票时算「资格名单」→ **用户明明刚绑定却被判「无投票资格」**。旧实现靠「每次发起投票都 `load()` 一次」绕开（vote.py 里那句注释「确保资格名单是最新的」），但 load 只读**磁盘**、看不到另一个实例内存里尚未落盘的修改，且两个实例 load 时刻不同步 → 名单依然可能是旧的。另有 `load()` 自身两个缺陷：`super().load()` 是 `update()` 语义（**不 clear**）+ `_players` **只增不减** → 磁盘上已 `remove_player()` 删掉的玩家**残留**在内存 → `get_player()` 仍能找到他（已解绑用户仍能投票），`get_all_players()` 还会把僵尸条目算进去。修复：① `PlayerManager.get_instance(server, bound_system)` —— 按**数据文件路径**做进程内单例（类属性 dict + `Lock`），`bound.py`/`vote.py` 都改走它 → 绑定改动对所有消费者**立即可见**；② 单例**保留第一个构造者**的 `bound_system`（语义上它才是绑定系统，vote 只是借用来读全局 config —— 顶替当前无害，但将来 bound_system 上多了 bound 独有的东西就会静默 AttributeError）；③ `load()` 改为**先 clear 再整体替换**（dict 层 + `_players` 快照同步重建），并跳过非 dict 的脏数据；④ 删掉 `vote.py` 里两处 `load()` —— 单例后内存天然一致，**再 load 反而会把内存重置成磁盘内容、丢掉尚未落盘的绑定** |
 | test_native.py | native_chat 分支：走原版 `/tellraw @a <JSON>` 系统消息通道（`ClientboundSystemChatPacket`，不触发聊天验证错误）；`[群名] [QQ转发]名字:` 拼接、引号/反斜杠/换行转义、`show_group_prefix` 只控制可选的 `[群名] ` 前缀（头部无条件保留）、`prefix_color` 上色 |
 | test_e2e.py | 完整数据流：官方 GROUP_MESSAGE_CREATE（带图片附件）→ 群号绑定 → 图片下载缓存（本地 http server）→ BroadcastInfo → MCConnector native_chat → `tellraw @a` 系统消息命令（CICode 公网 url 优先）+ C2C 链路 |
 | test_migration.py | 配置兼容实证：v2.2.4 老配置（token/群号/管理员/自定义群名/模板）迁移后用户值原样保留，新键（connection.type / official / native_chat）自动补全且默认不改变旧行为 |

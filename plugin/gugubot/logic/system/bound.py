@@ -24,7 +24,7 @@ class BoundSystem(BasicSystem):
         """初始化绑定系统。"""
         super().__init__("bound", enable=False, config=config)
         self.server = server
-        self.player_manager = PlayerManager(server, self)
+        self.player_manager = PlayerManager.get_instance(server, self)
         self.whitelist: Optional[WhitelistSystem] = None
 
     def initialize(self) -> None:
