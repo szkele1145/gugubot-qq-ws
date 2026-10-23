@@ -344,11 +344,17 @@ class KeyWordSystem(BasicConfig, BasicSystem):
             )
             return True
 
-        cache_image = self.config.get_keys(
-            ["system", "key_words", "cache_image"], False
-        )
-        if cache_image:
-            self._cleanup_cached_images(self[command])
+        # **无条件**清理该关键词引用的缓存图片。
+        #
+        # 旧实现把清理挂在 ``cache_image`` 开关上，于是这条路径会漏文件：
+        # 用户先在 cache_image=true 时添加带图关键词（图片已下载到
+        # key_words_images/），之后把开关改成 false，再删除该关键词 →
+        # 清理被跳过 → 图片**永久残留**（插件启动不扫缓存目录，
+        # _cleanup_cached_images 也只有这一处调用）。
+        #
+        # 而清理本身与开关无关：它只删「该关键词引用、且确实位于
+        # image_cache_dir 内」的文件，没图就是空操作。
+        self._cleanup_cached_images(self[command])
         del self[command]
         self.save()
         await self.reply(
