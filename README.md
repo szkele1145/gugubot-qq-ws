@@ -1,4 +1,4 @@
-# GUGUBot（增强改造版）
+﻿# GUGUBot（增强改造版）
 
 一个 MCDReforged 插件，实现 **Minecraft 服务器 ↔ QQ 群** 双向互通。
 
@@ -57,9 +57,11 @@ plugin/                插件本体（打包成 .mcdr 的内容）
   gugubot/parser/      消息解析器
   gugubot/ws/          WebSocket 服务端
   lang/                多语言（zh_cn / en_us）
-tests/                 pytest 用例（当前 418 项）
+tests/                 pytest 用例（当前 491 项）
 guguchat-mod/          GuguChat Mod 源码（可选，非必需）
 改造说明.md            逐条缺陷修复与设计决策记录
+修复模式索引.md        按成因归类的修复模式（87 个修复归纳成十几种模式）
+交接文档.md            全量交接文档（零上下文接手用）
 通宵战报.md            迭代战报
 ```
 
@@ -71,7 +73,7 @@ guguchat-mod/          GuguChat Mod 源码（可选，非必需）
 # 安装依赖
 pip install -r plugin/requirements.txt
 
-# 跑全部用例（约 54 秒）
+# 跑全部用例（约 97 秒）
 py -m pytest tests/ -q
 
 # 语法自检
@@ -86,7 +88,8 @@ py -m compileall -q plugin/gugubot
 ## 文档
 
 - 详细功能与配置说明 → [`plugin/README.md`](plugin/README.md)
-- 缺陷修复与设计决策 → [`改造说明.md`](改造说明.md)
+- 缺陷修复与设计决策 → [改造说明.md](改造说明.md)
+- **修复模式索引（推荐先读）→ [修复模式索引.md](修复模式索引.md)**
 - 迭代记录 → [`通宵战报.md`](通宵战报.md)
 
 ---
