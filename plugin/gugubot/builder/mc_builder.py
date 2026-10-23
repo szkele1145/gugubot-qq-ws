@@ -11,6 +11,7 @@ from packaging import version
 
 from gugubot.builder.basic_builder import BasicBuilder
 from gugubot.constant import qq_emoji_map
+from gugubot.utils.message import strip_minecraft_color_codes
 from gugubot.utils.player_manager import PlayerManager
 
 
@@ -217,6 +218,20 @@ class McMessageBuilder(BasicBuilder):
         RText
             Minecraft message in MCDR - RText format
         """
+        # **必须剥 MC 颜色码**：group_name / sender / receiver 都是用户可控
+        # 文本（QQ 昵称、自定义群名），而 RText 的文本最终由 MC 客户端渲染，
+        # ``§`` 照样生效 —— 用户把昵称改成 ``§c§l管理员`` 就能伪造红色粗体的
+        # 「[QQ转发]管理员:」，冒充管理/系统发言。
+        #
+        # 在**注入点**统一处理（而不是在调用方）：这样以后新增调用点也自动
+        # 受保护。#94 修的是 native_chat（/tellraw）那条路，漏了这条 RText
+        # 路径 —— 又一次「修了一边没修对称的另一边」。
+        group_name = strip_minecraft_color_codes(group_name)
+        if sender is not None:
+            sender = strip_minecraft_color_codes(sender)
+        if receiver is not None:
+            receiver = strip_minecraft_color_codes(receiver)
+
         rtext = RText(f"[{group_name}]", color=RColor.gold)
 
         # If the group ID exists, set the group hover text and click event
