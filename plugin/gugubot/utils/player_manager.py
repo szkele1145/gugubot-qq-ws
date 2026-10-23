@@ -30,6 +30,15 @@ class Player:
         elif player_name not in self.java_name:
             self.java_name.append(player_name)
 
+    def remove_name(self, player_name: str, is_bedrock: bool = False) -> None:
+        """移除名称（回滚用）"""
+        if is_bedrock:
+            if player_name in self.bedrock_name:
+                self.bedrock_name.remove(player_name)
+        else:
+            if player_name in self.java_name:
+                self.java_name.remove(player_name)
+
     def add_account(self, platform: str, account_id: str) -> None:
         """添加关联账号"""
         account_id = str(account_id)
@@ -37,6 +46,14 @@ class Player:
             self.accounts[platform] = []
         if account_id not in self.accounts[platform]:
             self.accounts[platform].append(account_id)
+
+    def remove_account(self, platform: str, account_id: str) -> None:
+        """移除关联账号（回滚用）"""
+        account_id = str(account_id)
+        if platform in self.accounts and account_id in self.accounts[platform]:
+            self.accounts[platform].remove(account_id)
+            if not self.accounts[platform]:
+                del self.accounts[platform]
 
     def set_property(self, key: str, value: Any) -> None:
         """设置自定义属性"""

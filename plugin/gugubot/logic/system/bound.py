@@ -536,6 +536,11 @@ class BoundSystem(BasicSystem):
                     success = _bound_whitelist(
                         player_name, is_offline, is_online, is_bedrock
                     )
+                    # 白名单添加失败 → 回滚玩家数据，避免「绑了玩家数据但白名单没加」
+                    # 的不一致状态（用户再绑会被判「该名字已被其他用户绑定」卡死）
+                    if not success:
+                        existing_player.remove_name(player_name, is_bedrock)
+                        self.player_manager.save()
                     await _set_group_card_if_qq(
                         player_name, platform, broadcast_info, target_id
                     )
@@ -547,6 +552,9 @@ class BoundSystem(BasicSystem):
                     success = _bound_whitelist(
                         player_name, is_offline, is_online, is_bedrock
                     )
+                    if not success:
+                        existing_player.remove_account(platform, target_id)
+                        self.player_manager.save()
                     await _set_group_card_if_qq(
                         player_name, platform, broadcast_info, target_id
                     )
@@ -563,6 +571,16 @@ class BoundSystem(BasicSystem):
             )
             self.player_manager.save()
             success = _bound_whitelist(player_name, is_offline, is_online, is_bedrock)
+            if not success:
+                # 白名单添加失败 → 回滚（仅移除这条 account；如果该玩家再
+                # 没有其他 account，则整个条目也删掉，避免僵尸玩家残留）
+                p = self.player_manager.get_player(target_id, platform=platform)
+                if p is not None:
+                    p.remove_account(platform, target_id)
+                    if not p.accounts:
+                        self.player_manager.remove_player(p.name)
+                    else:
+                        self.player_manager.save()
             await _set_group_card_if_qq(
                 player_name, platform, broadcast_info, target_id
             )
