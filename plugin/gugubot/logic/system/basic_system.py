@@ -210,10 +210,19 @@ class BasicSystem:
 
         # 使用当前接收来源或原始来源
         receiver_source = broadcast_info.receiver_source or origin_source
-        await self.system_manager.connector_manager.broadcast_processed_info(
+        # 接住 {连接器: 异常}：回复**没送到**时必须留下痕迹。旧实现丢弃
+        # 返回值，用户敲了命令却什么也没收到，日志里只有 _safe_send 的
+        # 一条 traceback，看不出「这是在回哪条命令」。
+        failures = await self.system_manager.connector_manager.broadcast_processed_info(
             respond,
             include=[receiver_source]
         )
+        if failures:
+            self.logger.warning(
+                f"[回复] 回复未能送达以下连接器: "
+                f"{'、'.join(sorted(failures.keys()))}"
+                f"（事件类型: {broadcast_info.event_sub_type}）"
+            )
 
     async def reply_to_source(
         self, broadcast_info: BroadcastInfo, message: List[dict]
@@ -238,9 +247,16 @@ class BasicSystem:
             event_sub_type=broadcast_info.event_sub_type,
             target={target_source: broadcast_info.event_sub_type},
         )
-        await self.system_manager.connector_manager.broadcast_processed_info(
+        # 同 reply()：接住失败字典，别让回复静默丢失
+        failures = await self.system_manager.connector_manager.broadcast_processed_info(
             respond, include=[reply_target]
         )
+        if failures:
+            self.logger.warning(
+                f"[回复] 回复未能送达以下连接器: "
+                f"{'、'.join(sorted(failures.keys()))}"
+                f"（事件类型: {broadcast_info.event_sub_type}）"
+            )
 
     def get_bridge_source_name(self) -> str:
         return self.config.get_keys(
