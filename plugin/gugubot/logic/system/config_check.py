@@ -282,7 +282,8 @@ class ConfigCheckSystem(BasicSystem):
             def _check_group_ids(key_path: list, label: str) -> None:
                 nonlocal ok
                 ids = self.config.get_keys(key_path, []) or []
-                virtuals = []
+                virtuals = []        # 200000xxx 虚拟**群**号
+                wrong_virtuals = []  # 100000xxx 虚拟**用户**号（填错段了）
                 reals = []
                 opens = []
                 others = []
@@ -290,8 +291,19 @@ class ConfigCheckSystem(BasicSystem):
                     s = str(i).strip() if i is not None else ""
                     if not s:
                         continue
-                    if s.isdigit() and len(s) == 12 and s[:6] in ("100000", "200000"):
+                    if s.isdigit() and len(s) == 12 and s[:6] == "200000":
                         virtuals.append(s)
+                    elif s.isdigit() and len(s) == 12 and s[:6] == "100000":
+                        # 与 _check_virtual_user_ids 的方向对称：那边拒绝把
+                        # 群号段（200000xxx）填进 admin_ids，这边也必须拒绝
+                        # 把用户号段塞进群类配置 —— 否则检验给出「✅ 1 个
+                        # 虚拟号」，而该号永远匹配不上任何群，群监听/转发
+                        # 完全不工作，用户拿着"通过"的输出根本查不出问题。
+                        wrong_virtuals.append(s)
+                    elif s.isdigit() and len(s) == 12:
+                        # 12 位但不是已知号段：既不是虚拟群号也不是虚拟
+                        # 用户号，当真实群号用也匹配不上 → 归入无法识别
+                        others.append(s)
                     elif s.isdigit():
                         # 9-10 位真实 QQ 群号 → 走槽位自动绑定（标准用法）
                         reals.append(s)
@@ -300,6 +312,14 @@ class ConfigCheckSystem(BasicSystem):
                         opens.append(s)
                     else:
                         others.append(s)
+                if wrong_virtuals:
+                    ok = False
+                    lines.append(
+                        f"{label}: 含虚拟**用户**号 {wrong_virtuals[:3]}"
+                        f"{'...' if len(wrong_virtuals) > 3 else ''} ❌"
+                        f"（100000xxx 是用户号；群类配置请填 QQ 群号、"
+                        f"openid 原文，或 200000xxx 虚拟群号）"
+                    )
                 if others:
                     ok = False
                     lines.append(
@@ -307,7 +327,7 @@ class ConfigCheckSystem(BasicSystem):
                         f"{'...' if len(others) > 3 else ''} ❌（请填 QQ 群号、"
                         f"openid 原文，或 #我是谁 查到的 200000xxx 虚拟号）"
                     )
-                else:
+                if not wrong_virtuals and not others:
                     parts = []
                     if virtuals:
                         parts.append(f"{len(virtuals)} 个虚拟号")
