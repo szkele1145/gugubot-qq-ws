@@ -1,7 +1,7 @@
 import logging
 import re
 import traceback
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from mcdreforged.api.types import PluginServerInterface
 
@@ -94,13 +94,22 @@ class SystemManager:
 
             # Insert the system based on before and after dependencies
             if before or after:
-                insert_pos = 0
+                # 默认追加到末尾；命中锚点后取**第一个**匹配位置。
+                insert_pos = len(self.systems)
                 for i, existing_system in enumerate(self.systems):
                     if before and existing_system.name in before:
+                        # 插到锚点**之前**
+                        insert_pos = i
                         break
                     if after and existing_system.name in after:
+                        # 插到锚点**之后**
                         insert_pos = i + 1
-                    insert_pos = i + 1
+                        break
+                    # 注意：这里**不能**用「无条件 ``insert_pos = i + 1``」
+                    # 来推进位置 —— 旧实现正是这么写的，结果 ``after`` 分支
+                    # 算出的位置会被一路冲掉（只要锚点后面还有别的系统，
+                    # 新系统就被追加到末尾）；而 ``before`` 又反过来依赖了
+                    # 那个副作用才侥幸正常。两处都已改成显式赋值。
                 self.systems.insert(insert_pos, system)
             else:
                 self.systems.append(system)
@@ -110,6 +119,38 @@ class SystemManager:
             error_msg = str(e) + "\n" + traceback.format_exc()
             self.logger.error(f"初始化 {system.name} 失败: {error_msg}")
             raise
+
+    def register_systems(self, systems) -> Dict[str, BaseException]:
+        """批量注册：**单个系统初始化失败只跳过它自己**。
+
+        为什么需要
+        ----------
+        装配处若写成裸循环 ``for s in systems: register_system(s)``，
+        任一系统的 ``initialize()`` 抛异常就会**中断整轮**：
+
+        * 排在它**后面**的所有系统都没被注册；
+        * 异常继续冒泡出 ``on_load`` → 函数剩余部分（帮助消息注册、
+          版本检查等）全不执行。
+
+        用户侧表现是「机器人能跑但缺功能」，日志里只有一条
+        「初始化 X 失败」，完全看不出"后面的系统全没了"。
+
+        Returns
+        -------
+        Dict[str, BaseException]
+            ``{系统名: 异常}``；全部成功时为空字典。
+        """
+        failures: Dict[str, BaseException] = {}
+        for system in systems:
+            name = getattr(system, "name", None) or repr(system)
+            try:
+                self.register_system(system)
+            except Exception as e:
+                failures[name] = e
+                self.logger.error(
+                    f"系统 {name} 初始化失败，**已跳过**（其余系统继续注册）: {e}"
+                )
+        return failures
 
     def remove_system(self, system_name: str) -> bool:
         """移除一个系统实例。

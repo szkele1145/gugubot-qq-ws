@@ -243,8 +243,15 @@ async def on_load(server: PluginServerInterface, _) -> None:
     )
     systems.insert(len(systems) - 1, config_reload_system)
 
-    for system in systems:
-        system_manager.register_system(system)
+    # 批量注册：单个系统初始化失败只跳过它自己，不中断其余系统的注册
+    # （旧实现是裸循环，一个系统炸了会让排在它后面的系统**全部**注册不上，
+    # 异常还会冒泡出 on_load 让剩余启动步骤全不执行）。
+    failed_systems = system_manager.register_systems(systems)
+    if failed_systems:
+        server.logger.error(
+            f"[GUGUBot] 以下系统初始化失败，相关功能不可用（其余系统正常）: "
+            f"{'、'.join(failed_systems.keys())}"
+        )
 
     connector_manager.register_system_manager(system_manager)
 
