@@ -27,9 +27,11 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import itertools
 import mimetypes
 import os
 import re
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -39,6 +41,10 @@ import requests
 
 from gugubot.parser.basic_parser import BasicParser
 from gugubot.utils.types import BroadcastInfo, Source
+
+# 附件下载半成品文件名的唯一化序号（配合 pid + 线程 id 使用）。
+# itertools.count 的 __next__ 在 CPython 下是原子的，多线程取号不会重复。
+_PART_COUNTER = itertools.count(1)
 
 # <@!xxxx> 官方 at 用户/机器人标记（捕获 openid）
 _AT_USER_PATTERN = re.compile(r"<@!\s*([A-Za-z0-9_-]+)\s*>")
@@ -767,7 +773,23 @@ class QQOfficialParser(BasicParser):
         的超时，不是总时长——一个每 30 秒吐 1 字节的慢速源可以永远读
         下去，把下载线程占死（线程池满了就卡住其它消息处理）。
         """
-        tmp = local.with_suffix(local.suffix + ".part")
+        # 半成品文件名**每次唯一**。下载跑在 4 线程的专用池里
+        # （``_DOWNLOAD_WORKERS``），同一 URL 完全可能被并发请求：同一个人
+        # 连发两张相同的图、官方 Resume 补发导致同一事件被处理两次、两个群
+        # 同时收到同一个表情包……
+        #
+        # 固定名（旧实现 ``<digest>.png.part``）的问题不在"内容互相覆盖"
+        # ——同一 URL 两次下载的字节与偏移相同，结果碰巧仍是对的；真正的
+        # 伤害是 **finally**：先失败/先结束的那个线程会 unlink 这个共享
+        # 文件，而另一个线程随后 ``replace`` 找不到源 → 它那份**成功的**
+        # 下载被丢弃 → 该消息的附件不被缓存（退回原始 url，官方 CDN url
+        # 约 30 分钟过期 → 稍后回看就是裂图）。顺带还重复传输同一份数据。
+        #
+        # 与 #76 同一类缺陷：固定临时文件名 + 并发。
+        tmp = local.with_name(
+            f"{local.name}.{os.getpid()}.{threading.get_ident()}."
+            f"{next(_PART_COUNTER)}.part"
+        )
         deadline = time.monotonic() + self._ATTACHMENT_TOTAL_TIMEOUT
         try:
             with requests.get(url, timeout=20, stream=True) as resp:
