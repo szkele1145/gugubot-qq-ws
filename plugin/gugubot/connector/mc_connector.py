@@ -9,7 +9,7 @@ from gugubot.builder import McMessageBuilder
 from gugubot.config import BotConfig
 from gugubot.connector.basic_connector import BasicConnector
 from gugubot.parser.mc_parser import MCParser
-from gugubot.utils.message import segments_to_plain_text
+from gugubot.utils.message import segments_to_plain_text, strip_minecraft_color_codes
 from gugubot.utils.types import ProcessedInfo
 
 
@@ -335,6 +335,13 @@ class MCConnector(BasicConnector):
                 # sender：优先绑定游戏名（player_manager 已解析），
                 # 未绑定的 QQ 用户显示原始昵称
                 display_name = (sender or "QQ用户").strip()
+                # **必须剥 MC 颜色码**：``§`` 是**可打印字符**，
+                # isprintable() 拦不住它。用户把 QQ 群昵称改成
+                # ``§c§l管理员`` 就能在 MC 里把这行显示成红色粗体的
+                # 「[QQ转发]管理员:」→ 伪造格式、冒充管理发言。
+                # 正文走 segments_to_plain_text 时已经脱敏过，昵称这里
+                # 是唯一漏网的位置（另一条发送路径也做了脱敏）。
+                display_name = strip_minecraft_color_codes(display_name)
                 # 系统消息不走 brigadier，无需替换空格；仅剔除控制字符
                 display_name = "".join(
                     ch for ch in display_name if ch.isprintable()
