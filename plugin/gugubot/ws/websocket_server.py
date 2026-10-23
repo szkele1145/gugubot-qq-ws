@@ -354,7 +354,7 @@ class WebSocketServer:
         Returns
         -------
         int
-            Number of clients the message was sent to.
+            **真实送达**的客户端数量。
         """
         if not self._is_running or not self.server:
             self.logger.warning("服务器未运行，无法广播消息")
@@ -364,11 +364,37 @@ class WebSocketServer:
             if isinstance(message, (dict, list)):
                 message = json.dumps(message, ensure_ascii=False)
 
-            self.server.send_message_to_all(message)
-            with self._clients_lock:
-                count = len(self.clients)
-            self.logger.debug("向 %s 个客户端广播消息: %s", count, message)
-            return count
+            # **不要**用库的 ``send_message_to_all``：它是逐个客户端写
+            # socket 的朴素循环，**没有 per-client 异常保护**。只要有一个
+            # 客户端已经断开（对端进程被杀 / 网络掉线但 TCP 还没感知），
+            # 对它的写就会抛异常 → 异常冒泡**中断整个循环** → 排在它后面
+            # 的客户端**完全收不到这条消息**；而本方法的 except 还会
+            # ``return 0``，让调用方以为「一条都没发出去」，与事实相反。
+            #
+            # 这里改成：取快照 → 逐个发 → 单个失败只跳过它。
+            clients = self.get_clients()
+            sent = 0
+            for client in clients:
+                try:
+                    self.server.send_message(client, message)
+                    sent += 1
+                except Exception as e:
+                    # 该客户端大概率已断线：跳过，继续给其余客户端发。
+                    # 每次广播都打 error 会刷屏，降到 debug；真正需要
+                    # 关注的是它没收到消息这件事，而 sent 计数已经反映。
+                    self.logger.debug(
+                        "广播跳过客户端 %s: %s",
+                        client.get("address", "unknown") if isinstance(client, dict) else client,
+                        e,
+                    )
+
+            if sent < len(clients) and clients:
+                self.logger.warning(
+                    "广播：%s/%s 个客户端送达（%s 个已断线或写入失败）",
+                    sent, len(clients), len(clients) - sent,
+                )
+            self.logger.debug("向 %s 个客户端广播消息: %s", sent, message)
+            return sent
 
         except Exception as e:
             error_msg = str(e) + "\n" + traceback.format_exc()
