@@ -82,15 +82,36 @@ class BridgeConnector(BasicConnector):
         """Start the WebSocket bridge server in a daemon thread."""
         self.logger.info(f"{self.log_prefix} 正在启动桥接服务器")
 
-        self.ws_server = WebSocketFactory.create_bridge_server(
-            self.config,
-            on_message=self._handle_server_message,
-            on_client_connect=self._on_client_connect,
-            on_client_disconnect=self._on_client_disconnect,
-            logger=self.logger,
-        )
+        try:
+            self.ws_server = WebSocketFactory.create_bridge_server(
+                self.config,
+                on_message=self._handle_server_message,
+                on_client_connect=self._on_client_connect,
+                on_client_disconnect=self._on_client_disconnect,
+                logger=self.logger,
+            )
+        except Exception as e:
+            # 依赖库缺失（websocket-server 未安装）等 → 桥接不可用，但
+            # QQ ↔ MC 主链路必须继续工作，不能因此中断插件加载。
+            self.ws_server = None
+            self.logger.error(
+                f"{self.log_prefix} 无法创建桥接服务器: {e}\n"
+                f"  mod 端将无法连接；QQ ↔ MC 主链路不受影响。"
+            )
+            return
 
-        self.ws_server.start(daemon=True)
+        try:
+            # start() 现在会**如实抛出**启动失败（端口占用 / 权限不足），
+            # 不再打印虚假的「已启动」。这里必须兜住：桥接不可用是降级，
+            # 不能让它冒泡出去中断整个插件加载。
+            self.ws_server.start(daemon=True)
+        except Exception as e:
+            self.logger.error(
+                f"{self.log_prefix} 桥接服务器启动失败: {e}\n"
+                f"  mod 端将无法连接。请检查端口是否被其他程序占用，"
+                f"或在配置里换一个端口（connector.minecraft_bridge.port）。"
+            )
+            return
 
         self.logger.info(f"{self.log_prefix} 桥接服务器就绪 ~")
 

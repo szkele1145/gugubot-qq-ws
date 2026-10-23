@@ -85,6 +85,11 @@ class WebSocketServer:
         #     端口一直占用（插件 reload 时报「端口已被占用」）。
         self._clients_lock = threading.Lock()
         self._is_running = False
+        # 运行线程里的启动期异常（端口占用 / 权限不足）。start() 醒来后
+        # 据此抛出真实原因，而不是打印虚假的「已启动」。
+        self._start_error: Optional[BaseException] = None
+        # 是否由 stop() 主动要求停止：用于区分「正常停止」与「意外退出」
+        self._stop_requested = False
 
         # Callbacks
         self._on_message_callback = on_message
@@ -179,15 +184,39 @@ class WebSocketServer:
             self.server.set_fn_client_left(self._handle_client_left)
             self.server.set_fn_message_received(self._handle_message)
 
+            self._start_error = None
+            self._stop_requested = False
+
+            # **置位必须先于起线程**：``_run_server`` 的 finally 会把
+            # ``_is_running`` 置回 False。若顺序反过来（旧实现），
+            # 端口被占用时 ``run_forever()`` 立刻抛异常 → 子线程走 finally
+            # 置 False → 主线程随后又置 True → 「线程已死、状态却说在跑」。
+            self._is_running = True
+
             self.server_thread = threading.Thread(
                 target=self._run_server, name="WebSocketServer", daemon=daemon
             )
             self.server_thread.start()
-            self._is_running = True
+
+            # 短暂等待，确认线程真的进了 accept 循环。
+            # ``websocket-server`` 的 socket 是在 ``run_forever()`` 里才绑定
+            # 的，端口占用 / 权限不足都在**线程内**炸，不 join 就发现不了
+            # —— 旧实现因此会对着一个没起来的 server 打印「已启动」，
+            # 而 ``bridge_connector`` 靠 ``is_running()`` 判断，会以为一切
+            # 正常、不再重试启动，用户侧只看到「一直连不上」。
+            self.server_thread.join(0.2)
+            if not self.server_thread.is_alive():
+                self._is_running = False
+                reason = self._start_error
+                raise RuntimeError(
+                    f"WebSocket 服务器未能启动（{self.host}:{self.port}）——"
+                    f"端口可能已被占用或权限不足: {reason}"
+                )
 
             self.logger.info("WebSocket服务器已启动在 %s:%s", self.host, self.port)
 
         except Exception as e:
+            self._is_running = False
             error_msg = str(e) + "\n" + traceback.format_exc()
             self.logger.error("启动WebSocket服务器失败: %s", error_msg)
             raise
@@ -197,8 +226,17 @@ class WebSocketServer:
         try:
             self.server.run_forever()
         except Exception as e:
+            self._start_error = e
             error_msg = str(e) + "\n" + traceback.format_exc()
             self.logger.error(f"WebSocket服务器运行出错: {error_msg}")
+            if not self._stop_requested:
+                # 非主动停止 → 大概率是端口占用 / 权限不足。给出可操作提示，
+                # 别让用户对着「已启动」的日志猜。
+                self.logger.error(
+                    "WebSocket 服务器意外退出：端口 %s 可能已被其他程序占用，"
+                    "或当前用户无权监听该端口。mod／桥接端将无法连接。",
+                    self.port,
+                )
         finally:
             self._is_running = False
 
@@ -215,6 +253,8 @@ class WebSocketServer:
             return
 
         try:
+            # 标记为「主动停止」：_run_server 据此区分正常停止与意外退出
+            self._stop_requested = True
             if self.server:
                 # 取快照再逐个断开：拿快照时加锁，避免与收包线程的
                 # append/remove 撞车（copy 撞上并发修改会抛 RuntimeError，
