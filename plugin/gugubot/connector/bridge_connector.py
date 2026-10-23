@@ -133,25 +133,50 @@ class BridgeConnector(BasicConnector):
         else:
             self.logger.info(f"{self.log_prefix} 正在连接到桥接服务器")
 
-        self.ws_client = WebSocketFactory.create_bridge_client(
-            self.config,
-            on_message=self._handle_client_message,
-            on_open=self._on_client_open,
-            on_error=self._on_client_error,
-            on_close=self._on_client_close,
-            logger=self.logger,
-        )
+        self.ws_client = None
+        try:
+            self.ws_client = WebSocketFactory.create_bridge_client(
+                self.config,
+                on_message=self._handle_client_message,
+                on_open=self._on_client_open,
+                on_error=self._on_client_error,
+                on_close=self._on_client_close,
+                logger=self.logger,
+            )
+        except Exception as e:
+            # 依赖库缺失 / 配置非法 → 桥接不可用。**必须兜住**：异常会经
+            # ConnectorManager.register_connector 重新抛出 → on_load →
+            # 整个插件加载中断（连 QQ ↔ MC 主链路都起不来），
+            # 而本来只是「桥接」这一个功能不可用。
+            self.logger.error(
+                f"{self.log_prefix} 无法创建桥接客户端: {e}\n"
+                f"  跨服桥接不可用；QQ ↔ MC 主链路不受影响。"
+            )
+            return
 
-        self.ws_client.connect(
-            reconnect=self.reconnect,
-            ping_interval=self.ping_interval,
-            ping_timeout=self.ping_timeout,
-            use_ssl=self.use_ssl,
-            verify=self.verify,
-            ca_certs=self.ca_certs,
-            extra_sslopt=self.extra_sslopt,
-            thread_name=f"[GUGUBot]Bridge_{self._client_id}",
-        )
+        try:
+            self.ws_client.connect(
+                reconnect=self.reconnect,
+                ping_interval=self.ping_interval,
+                ping_timeout=self.ping_timeout,
+                use_ssl=self.use_ssl,
+                verify=self.verify,
+                ca_certs=self.ca_certs,
+                extra_sslopt=self.extra_sslopt,
+                thread_name=f"[GUGUBot]Bridge_{self._client_id}",
+            )
+        except Exception as e:
+            # 与 _start_server 对称：连接失败是降级，不能中断插件加载。
+            # 注意 connect() 是「起后台线程后立即返回」，真正的连接结果由
+            # on_open / on_error 回调报告；这里只兜住**同步**阶段的异常
+            # （非法 URL、非法 sslopt、线程起不来等）。
+            self.logger.error(
+                f"{self.log_prefix} 连接桥接服务器失败: {e}\n"
+                f"  跨服桥接不可用；QQ ↔ MC 主链路不受影响。"
+                f"请检查 connector.minecraft_bridge.connection 下的 "
+                f"address / use_ssl / sslopt 配置。"
+            )
+            return
 
     def _on_client_connect(self, client: Dict, _: Any) -> None:
         """Handle a new client connecting to the bridge server."""
