@@ -4,7 +4,6 @@ from typing import Optional
 
 from mcdreforged.api.types import Info, PluginServerInterface
 
-from gugubot.builder import CQHandler
 from gugubot.parser.basic_parser import BasicParser
 from gugubot.utils.types import BroadcastInfo, Source
 
@@ -44,7 +43,15 @@ class MCParser(BasicParser):
             broadcast_info = BroadcastInfo(
                 event_type="message",
                 event_sub_type="group",
-                message=CQHandler.parse(content),
+                # **MC 聊天是纯文本，不做 CQ 解析**。
+                #
+                # CQ 码是 QQ 侧的表示法，只应出现在**来自 QQ** 的消息里
+                # （qq_parser 解析它是对的）。旧实现把玩家打的字直接交给
+                # CQHandler.parse，于是任何能在 MC 里说话的人打一句
+                # ``[CQ:at,qq=all] 都来看`` 就能在绑定的 QQ 群里触发
+                # **真正的 @全体成员**；``[CQ:image,file=<任意URL>]`` 还能
+                # 往群里发任意图片（可用于钓鱼）。属于把用户输入当指令执行。
+                message=[{"type": "text", "data": {"text": content}}],
                 raw=content,
                 server=server,
                 logger=self.logger,
