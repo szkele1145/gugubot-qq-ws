@@ -151,6 +151,8 @@ class QQOfficialWSClient:
         self._hb_generation = 0
         # 最近一次关闭码（4014 等鉴权类错误用长退避）
         self._last_close_code: Optional[int] = None
+        # 本次连接尝试是否收到过 Hello（用于区分「连上后断开」vs「连不上」）
+        self._got_hello = False
 
     # ------------------------------------------------------------------ #
     # 连接管理
@@ -237,8 +239,15 @@ class QQOfficialWSClient:
                         on_close=self._on_close,
                     )
                 first_run = False
+                self._got_hello = False
                 self.ws.run_forever()
-                backoff = 3  # 连接成功过则重置退避
+                # 只有「真正连上过」才重置退避。websocket-client 的
+                # run_forever() 在 TCP 连不上时**不抛异常**（内部捕获后
+                # 回调 on_error 再正常返回）——若无条件重置 backoff，
+                # 网络中断期间会以初始退避 3s 无限快速重试（重连风暴，
+                # 且 /gateway REST 请求也会跟着打频率限制）。
+                if self._got_hello:
+                    backoff = 3
             except Exception as e:
                 if logger:
                     logger.error(f"[QQ官方] WS 运行异常: {e}\n{traceback.format_exc()}")
@@ -261,6 +270,7 @@ class QQOfficialWSClient:
         # 连接成功 → 清除上一次的失败标记：否则若曾遇 4014，后续每次
         # 循环都会白白等 60s 长退避（尽管连接早已正常）。
         self._last_close_code = None
+        self._got_hello = False
 
     def _on_error(self, _, error) -> None:
         if self._logger:
@@ -346,6 +356,7 @@ class QQOfficialWSClient:
                 self._heartbeat_interval = 30.0
             if logger:
                 logger.info(f"[QQ官方] 收到 Hello，心跳间隔 {self._heartbeat_interval}s")
+            self._got_hello = True
             if self.session_id:
                 self._send_resume()
             else:
