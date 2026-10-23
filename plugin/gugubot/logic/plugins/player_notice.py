@@ -60,9 +60,32 @@ def _format_duration(seconds: float) -> str:
     return "".join(parts)
 
 
-def _match_player_name(content: str, patterns: List[str]) -> Optional[str]:
+def _match_player_name(
+        content: str, patterns: List[str], logger=None
+) -> Optional[str]:
+    """按 pattern 顺序匹配玩家名；**非法正则只跳过、不抛**。
+
+    ``player_join_patterns`` / ``player_left_patterns`` 是用户可编辑的正则
+    （``default_config.yml`` 里明确写着「正则表达式模式」）。用户写错一个
+    括号就会让 ``re.search`` 抛 ``re.error``；而本函数是在 MCDR 的
+    玩家进出事件回调里被调用的，**没有外层 try/except** → 每次有玩家进出
+    都再炸一次：日志刷屏 + 进出播报功能直接死掉。
+
+    同模块的 ``is_bot()`` 早就防住了同样的问题（``except re.error:
+    continue``），这里是漏掉的一处。捕获后继续尝试下一个 pattern，
+    并（可选）打一条 warning 点名出错的 pattern —— 否则用户只看到
+    "播报不工作"，想不到是配置里正则写错了。
+    """
     for pattern in patterns:
-        if match := re.search(pattern, content):
+        try:
+            match = re.search(pattern, content)
+        except re.error as e:
+            if logger is not None:
+                logger.warning(
+                    f"[玩家通知] 配置里的正则表达式无效，已跳过: {pattern!r}（{e}）"
+                )
+            continue
+        if match:
             name = match.group(1) if match.groups() else match.group(0)
             return name.strip() if name else None
     return None
@@ -149,7 +172,9 @@ def create_on_player_join(
         join_patterns = config.get_keys(
             ["connector", "minecraft", "player_join_patterns"], []
         )
-        player_name = _match_player_name(info.content, join_patterns)
+        player_name = _match_player_name(
+            info.content, join_patterns, logger=server.logger
+        )
         if player_name is None:
             return
 
@@ -197,7 +222,9 @@ def create_on_player_left(
         left_patterns = config.get_keys(
             ["connector", "minecraft", "player_left_patterns"], []
         )
-        player_name = _match_player_name(info.content, left_patterns)
+        player_name = _match_player_name(
+            info.content, left_patterns, logger=server.logger
+        )
         if player_name is None:
             return
 
