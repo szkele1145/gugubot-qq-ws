@@ -135,10 +135,19 @@ async def _broadcast_notice(
             event_sub_type="group",
             target=notice_target,
         )
-        await connector_manager.broadcast_processed_info(
+        # 接住 {连接器: 异常}：播报**没送到**时必须可见。
+        # 旧实现丢弃返回值 —— 成功只记 debug（默认日志级别看不到），失败
+        # 一条日志都没有 → 用户无法判断是「没触发」还是「发了没送达」。
+        failures = await connector_manager.broadcast_processed_info(
             processed_info, exclude=exclude_sources
         )
-        server.logger.debug(message)
+        if failures:
+            server.logger.warning(
+                f"[玩家通知] 播报未能送达以下连接器: "
+                f"{'、'.join(sorted(failures.keys()))}（内容: {message}）"
+            )
+        else:
+            server.logger.debug(message)
     except Exception as e:
         server.logger.error(
             server.tr(
