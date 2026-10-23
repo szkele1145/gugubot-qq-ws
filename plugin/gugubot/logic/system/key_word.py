@@ -102,6 +102,12 @@ class KeyWordSystem(BasicConfig, BasicSystem):
             return True
 
         if content in self:
+            # 空文本不得命中关键词：``#关键词 添加`` 不带内容时，旧实现会把
+            # 下一条消息存成 ``self[""]``，之后**所有没有文字的消息**（纯图片
+            # / 纯表情）``content == ""`` 都会命中 → 机器人莫名其妙回一张图。
+            # 这里同时免疫历史数据里已经存在的空键。
+            if not content.strip():
+                return False
             # 与 echo 一致：来源 connector enable_send=False 则不转发到任何其他渠道
             source_name = broadcast_info.receiver_source or broadcast_info.source.origin
             source_connector = self.system_manager.connector_manager.get_connector(source_name)
@@ -204,6 +210,17 @@ class KeyWordSystem(BasicConfig, BasicSystem):
 
         for i in [command_prefix, system_name, add_command]:
             command = command.replace(i, "", 1).strip()
+
+        # **拒绝空关键词**。否则用户敲 ``#关键词 添加`` 后，下一条消息会被
+        # 存成 ``self[""]``；而匹配时 ``content`` 是消息里 text 段的拼接，
+        # 纯图片消息的 content 就是 "" → 之后**每一张图**都会触发这条关键词
+        # 回复（用户发图、机器人回图，看起来像幽灵回复）。
+        if not command:
+            await self.reply(
+                broadcast_info,
+                [MessageBuilder.text(self.get_tr("add_instruction"))],
+            )
+            return True
 
         if command in self:
             await self.reply(
