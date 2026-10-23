@@ -113,6 +113,10 @@ class GeneralHelpSystem(BasicSystem):
         # 已直接写死命令名，因此这两个参数缺省不影响显示。
         official_status_cmd = "#状态 / #status"
         whoami_cmd = "#我是谁 / #whoami"
+        # 配置检验/重载：内置模板已直接写死，但自定义语言模板可能引用
+        # {config_check}/{config_reload}，缺参数会触发 KeyError（与上面同理）
+        config_check_cmd = "#配置检验 / #config check"
+        config_reload_cmd = "#重载配置 / #reload config"
 
         # 根据是否是管理员显示不同的帮助信息
         if is_admin:
@@ -141,6 +145,10 @@ class GeneralHelpSystem(BasicSystem):
                 inactive_check=inactive_check_name,
                 official_status=official_status_cmd,
                 whoami=whoami_cmd,
+                # 自定义模板可能引用 {config_check}/{config_reload}（与
+                # official_status 同理：缺参数会抛 KeyError）
+                config_check=config_check_cmd,
+                config_reload=config_reload_cmd,
             )
         else:
             help_msg = self.get_tr(
@@ -176,6 +184,8 @@ class GeneralHelpSystem(BasicSystem):
                 execute_mcdr=execute_mcdr_cmd,
                 unbound_check=unbound_check_name,
                 inactive_check=inactive_check_name,
+                config_check=config_check_cmd,
+                config_reload=config_reload_cmd,
             )
 
         await self.reply(broadcast_info, [MessageBuilder.text(help_msg)])
