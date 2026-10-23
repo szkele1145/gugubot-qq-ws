@@ -5,7 +5,6 @@ Provides registration, removal, and message broadcasting across connectors.
 
 import asyncio
 import logging
-import re
 import traceback
 from typing import Dict, List, Optional
 
@@ -167,20 +166,24 @@ class ConnectorManager:
         tasks = []
         to_connectors = self.connectors
 
-        # Use re.escape for literal matching so special chars in source names
-        # (e.g. brackets) don't break include/exclude filters.
+        # **精确相等**匹配（与 get_connector 一致）。
+        #
+        # 旧实现是 ``re.match(re.escape(p), c.source)`` —— 注释写的是
+        # "literal matching"，但 ``re.match`` 只锚定开头、不锚定结尾，实际
+        # 变成**前缀匹配**。连接器名（source_name）由用户自定义，互为前缀
+        # 极其常见（QQ / QQ2、Minecraft / MinecraftBeta、群 / 群2）：
+        #   * include 侧 → **消息重复**：reply() 用 include=[receiver_source]
+        #     回消息，选中 QQ 时 QQ2 也被带上 → 同一条回复发到两个连接器；
+        #   * exclude 侧 → **消息丢失**：echo 用 exclude=[source_name, ...]
+        #     避免回传自己，排除 QQ 时把 QQ2 一起排掉 → 该转发的消息静默消失。
         if include is not None:
             to_connectors = [
-                c
-                for c in to_connectors
-                if any(re.match(re.escape(p), c.source) for p in include)
+                c for c in to_connectors if any(c.source == p for p in include)
             ]
 
         if exclude is not None:
             to_connectors = [
-                c
-                for c in to_connectors
-                if not any(re.match(re.escape(p), c.source) for p in exclude)
+                c for c in to_connectors if not any(c.source == p for p in exclude)
             ]
 
         connector_info = f"广播消息到连接器: {to_connectors}"
