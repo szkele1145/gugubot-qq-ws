@@ -9,6 +9,7 @@
 import copy
 
 from gugubot.logic.system.basic_system import BasicSystem
+from gugubot.utils.num import as_id_list
 from gugubot.utils.types import BroadcastInfo, ProcessedInfo
 
 _EMPTY_TEXT = [{"type": "text", "data": {"text": " "}}]
@@ -146,11 +147,16 @@ class CrossBroadcastSystem(BasicSystem):
 
     def _build_qq_forward_target(self) -> dict | None:
         """构建 !!qq 自定义转发目标群字典，留空则由 QQ connector 自行决定。"""
-        group_ids = self.config.get_keys(
-            ["system", "cross_broadcast", "qq_forward_group_ids"], []
+        # as_id_list：`qq_forward_group_ids` 写成**标量**（`123456` 而非列表）
+        # 时，裸 `for gid in group_ids` 会逐字符遍历 → {"1": "group", ...}
+        # 这种垃圾目标（消息发到不存在的群，日志一堆失败）。
+        group_ids = as_id_list(
+            self.config.get_keys(
+                ["system", "cross_broadcast", "qq_forward_group_ids"], []
+            )
         )
-        if group_ids and any(group_ids):
-            return {str(gid): "group" for gid in group_ids if gid}
+        if group_ids:
+            return {gid: "group" for gid in group_ids}
         return None
 
     async def _broadcast_to(

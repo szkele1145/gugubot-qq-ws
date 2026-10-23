@@ -9,14 +9,18 @@ from mcdreforged.api.types import PluginServerInterface
 
 from gugubot.builder import MessageBuilder
 from gugubot.config import BotConfig
+from gugubot.utils.num import as_id_list
 from gugubot.utils.types import ProcessedInfo
 
 
 def _build_notice_target(group_ids: List) -> Optional[Dict[str, str]]:
-    groups = [g for g in (group_ids or []) if g]
+    # as_id_list：用户把群号写成**标量**（`group_ids: 123456` 而非列表）时，
+    # 裸 `for g in group_ids` 会逐字符遍历 → 造出 {"1": "group", ...} 这种
+    # 垃圾目标：消息发到不存在的群、日志一堆发送失败，而配置检验不查这项。
+    groups = as_id_list(group_ids)
     if not groups:
         return None
-    target = {str(g): "group" for g in groups}
+    target = {g: "group" for g in groups}
     if len(target) == 1:
         target["_"] = "group"  # 防止桥接连接器单目标过滤
     return target

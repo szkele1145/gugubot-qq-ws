@@ -14,6 +14,7 @@ from mcdreforged.api.types import Info, PluginServerInterface
 from gugubot.builder import MessageBuilder
 from gugubot.config import BotConfig
 from gugubot.connector import ConnectorManager
+from gugubot.utils.num import as_id_list
 from gugubot.utils.types import ProcessedInfo
 
 # on_info 每次都会重新创建 handler，冷却状态必须放在模块级
@@ -23,10 +24,11 @@ _join_announced: Set[str] = set()
 
 
 def _build_notice_target(group_ids: List) -> Optional[Dict[str, str]]:
-    groups = [g for g in (group_ids or []) if g]
+    # as_id_list：标量配置（`group_ids: 123456`）不能被逐字符遍历
+    groups = as_id_list(group_ids)
     if not groups:
         return None
-    target = {str(g): "group" for g in groups}
+    target = {g: "group" for g in groups}
     if len(target) == 1:
         target["_"] = "group"  # 防止桥接连接器单目标过滤
     return target
