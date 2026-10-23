@@ -716,7 +716,7 @@ class BoundSystem(BasicSystem):
                 # 从白名单中删除玩家名
                 self._remove_from_whitelist(player_name)
 
-                player.bedrock_name.remove(player_name)
+                self._drop_name(player.bedrock_name, player_name)
                 await self._clean_bound(player, self.player_manager)
                 await self.reply(
                     broadcast_info, [MessageBuilder.text(self.get_tr("unbind_success"))]
@@ -735,7 +735,7 @@ class BoundSystem(BasicSystem):
                 # 从白名单中删除玩家名
                 self._remove_from_whitelist(player_name)
 
-                player.java_name.remove(player_name)
+                self._drop_name(player.java_name, player_name)
                 await self._clean_bound(player, self.player_manager)
                 await self.reply(
                     broadcast_info, [MessageBuilder.text(self.get_tr("unbind_success"))]
@@ -747,6 +747,31 @@ class BoundSystem(BasicSystem):
                     [MessageBuilder.text(self.get_tr("player_not_found"))],
                 )
                 return True
+
+    @staticmethod
+    def _drop_name(names: list, player_name: str) -> bool:
+        """按**字符串形式**从名称列表里删掉一个条目（原地修改）。
+
+        为什么不能直接用 ``list.remove(player_name)``
+        --------------------------------------------------
+        ``_unbind_specific_player`` 的存在性判断是
+        ``player_name in [str(n) for n in player.java_name]`` —— 按 ``str``
+        口径比较；而旧实现随后调用 ``player.java_name.remove(player_name)``
+        —— 按**原值**比较。两个口径不一致时：列表里只要有非 ``str`` 条目
+        （旧版本数据、手工编辑过的 ``players.json``、YAML 把纯数字名解析成
+        int），判断会通过、删除会抛 ``ValueError`` → 解绑命令整个失败，
+        用户既解不掉也看不到有意义的提示。
+
+        Returns
+        -------
+        bool
+            是否删掉了（找不到返回 ``False``，不抛异常）。
+        """
+        for i, existing in enumerate(names):
+            if str(existing) == player_name:
+                del names[i]
+                return True
+        return False
 
     def _remove_from_whitelist(self, player_names: Union[str, List[str]]) -> None:
         """从白名单中删除玩家名的辅助函数
@@ -1286,16 +1311,27 @@ class BoundSystem(BasicSystem):
 
     ############################################################## 白名单检查 ##############################################################
 
-    def _get_unbound_whitelist(self) -> List[tuple]:
+    def _get_unbound_whitelist(self) -> Optional[List[tuple]]:
         """获取白名单中未绑定的玩家
 
         Returns
         -------
-        List[tuple]
-            未绑定的玩家列表，元组格式: (uuid, player_name)
+        Optional[List[tuple]]
+            未绑定玩家列表，元组格式 ``(uuid, player_name)``；
+            **``None`` 表示白名单 API 不可用**（未安装 ``whitelist_api``
+            插件 / 初始化失败），调用方必须跳过并给用户明确提示，
+            **不能**把它当成「没有未绑定成员」——那是假消息，而且同类
+            误判在删除类命令上会酿成数据丢失（参见
+            ``_get_extra_bound_member()`` 的既有约定）。
         """
         if not self.whitelist:
-            return []
+            return None
+        # WhitelistSystem 的 _api 在「未安装 whitelist_api 插件」时恒为
+        # None（initialize() 里取不到就保持 None）。旧实现只守了
+        # ``self.whitelist``，于是这里直接 None.get_whitelist() →
+        # AttributeError，管理员执行 #白名单检查 得不到任何回复。
+        if not getattr(self.whitelist, "_api", None):
+            return None
 
         result = []
 
@@ -1327,6 +1363,21 @@ class BoundSystem(BasicSystem):
 
         result = self._get_unbound_whitelist()
 
+        # None = 白名单 API 不可用（未安装 whitelist_api 插件 / 初始化失败）。
+        # 必须给明确提示：既不能当"全部已绑定"（假消息），也不能当
+        # "全部未绑定"（在移除命令里等于删光）。
+        if result is None:
+            await self.reply(
+                broadcast_info,
+                [
+                    MessageBuilder.text(
+                        "白名单 API 不可用（未安装 whitelist_api 插件，"
+                        "或其初始化失败），无法检查白名单"
+                    )
+                ],
+            )
+            return True
+
         if not result:
             await self.reply(
                 broadcast_info, [MessageBuilder.text("白名单检查: 所有玩家都已绑定~")]
@@ -1352,6 +1403,20 @@ class BoundSystem(BasicSystem):
             return True
 
         result = self._get_unbound_whitelist()
+
+        # None = 白名单 API 不可用。这条**删除**类命令尤其不能把
+        # 「不可用」当成「没有未绑定成员」——那会让管理员以为「已清理完毕」。
+        if result is None:
+            await self.reply(
+                broadcast_info,
+                [
+                    MessageBuilder.text(
+                        "白名单 API 不可用（未安装 whitelist_api 插件，"
+                        "或其初始化失败），未执行移除"
+                    )
+                ],
+            )
+            return True
 
         if not result:
             await self.reply(
