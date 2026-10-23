@@ -18,7 +18,7 @@ from mcdreforged.api.types import PluginServerInterface
 from gugubot.builder import MessageBuilder
 from gugubot.config import BasicConfig
 from gugubot.logic.system.basic_system import BasicSystem
-from gugubot.utils.num import safe_int
+from gugubot.utils.num import as_id_list, safe_int
 from gugubot.utils.types import BroadcastInfo
 
 
@@ -587,9 +587,9 @@ class InactiveCheckSystem(BasicConfig, BasicSystem):
 
         try:
             # 获取配置
-            group_ids = self.config.get_keys(
+            group_ids = as_id_list(self.config.get_keys(
                 ["connector", "QQ", "permissions", "group_ids"], []
-            )
+            ))
             inactive_days = safe_int(self.config.get_keys(
                 ["system", "inactive_check", "inactive_days"], 30
             ), 30)
@@ -614,18 +614,20 @@ class InactiveCheckSystem(BasicConfig, BasicSystem):
             all_players = self.bound_system.player_manager.get_all_players()
 
             # 获取管理员ID列表（用于跳过管理员）
-            admin_ids = set(
-                str(admin_id)
-                for admin_id in self.config.get_keys(
-                    ["connector", "QQ", "permissions", "admin_ids"], []
-                )
-            )
+            # as_id_list：`admin_ids: 111222333`（标量，少写一行 "-"）
+            # 会被逐字符拆成字符集合，真实管理员不在跳过集合里 → 管理员
+            # 被当成普通用户（收到「请先绑定」/ 被判不活跃）。
+            admin_ids = set(as_id_list(self.config.get_keys(
+                ["connector", "QQ", "permissions", "admin_ids"], []
+            )))
 
             # 获取管理群成员ID列表（通过API获取管理群的所有成员）
             admin_group_member_ids = set()
-            admin_group_ids = self.config.get_keys(
+            # as_id_list：标量会被逐字符遍历 → 对 "1"、"2"…… 逐个发
+            # get_group_member_list，每个都失败 → 日志刷屏。
+            admin_group_ids = as_id_list(self.config.get_keys(
                 ["connector", "QQ", "permissions", "admin_group_ids"], []
-            )
+            ))
             for admin_group_id in admin_group_ids:
                 if not admin_group_id:
                     continue
@@ -1003,9 +1005,10 @@ class InactiveCheckSystem(BasicConfig, BasicSystem):
 
                 # 发送到私聊管理员
                 if admin_private:
-                    admin_ids = self.config.get_keys(
+                    # as_id_list：标量配置不能被逐字符遍历
+                    admin_ids = as_id_list(self.config.get_keys(
                         ["connector", "QQ", "permissions", "admin_ids"], []
-                    )
+                    ))
                     for admin_id in admin_ids:
                         if not admin_id:
                             continue
@@ -1022,9 +1025,9 @@ class InactiveCheckSystem(BasicConfig, BasicSystem):
 
                 # 发送到管理群
                 if admin_groups:
-                    admin_group_ids = self.config.get_keys(
+                    admin_group_ids = as_id_list(self.config.get_keys(
                         ["connector", "QQ", "permissions", "admin_group_ids"], []
-                    )
+                    ))
                     for admin_group_id in admin_group_ids:
                         if not admin_group_id:
                             continue
