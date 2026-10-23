@@ -84,11 +84,20 @@ async def broadcast_server_start(
         )
 
         # 广播消息（排除Minecraft等平台）
-        await connector_manager.broadcast_processed_info(
+        # **必须接住返回值**：它是 {连接器 source: 异常}，专门用来判断
+        # 「谁没收到」。丢弃它就只能无条件报成功 —— QQ 掉线时通知一条都
+        # 没发出去，日志却写着「已广播」，直接误导排查方向。
+        failures = await connector_manager.broadcast_processed_info(
             processed_info, exclude=exclude_sources
         )
 
-        server.logger.info("[服务器通知] 已广播启动消息")
+        if failures:
+            server.logger.warning(
+                f"[服务器通知] 启动消息未能送达以下连接器: "
+                f"{'、'.join(sorted(failures.keys()))}（其余已送达）"
+            )
+        else:
+            server.logger.info("[服务器通知] 已广播启动消息")
 
     except Exception as e:
         server.logger.error(f"[服务器通知] 广播启动消息失败: {e}")
@@ -156,11 +165,18 @@ async def broadcast_server_stop(
         )
 
         # 广播消息（排除Minecraft等平台）
-        await connector_manager.broadcast_processed_info(
+        # 同 broadcast_server_start：接住 {source: 异常}，别谎报成功
+        failures = await connector_manager.broadcast_processed_info(
             processed_info, exclude=exclude_sources
         )
 
-        server.logger.info("[服务器通知] 已广播停止消息")
+        if failures:
+            server.logger.warning(
+                f"[服务器通知] 停止消息未能送达以下连接器: "
+                f"{'、'.join(sorted(failures.keys()))}（其余已送达）"
+            )
+        else:
+            server.logger.info("[服务器通知] 已广播停止消息")
 
     except Exception as e:
         server.logger.error(f"[服务器通知] 广播停止消息失败: {e}")
