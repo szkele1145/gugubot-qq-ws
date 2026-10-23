@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """同一 URL 并发下载必须各用各的临时文件（v2.2.10 续，88）。
 
 问题
@@ -140,7 +140,7 @@ def _make_parser(tmpdir):
         server=types.SimpleNamespace(get_data_folder=lambda: str(tmpdir)),
     )
     # 让清理节流「刚跑过」，避免测试里触发目录扫描
-    parser_mod.QQOfficialParser._CACHE_CLEAN_STATE["last_check"] = 1e18
+    inst._cache_last_check = 1e18
     return inst
 
 

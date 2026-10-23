@@ -129,6 +129,8 @@ class QQOfficialParser(BasicParser):
         # 里建池——否则这些实例会**永远没有下载池** → 附件静默不缓存
         # （图片段只剩 url）。建池推迟到 ``_get_download_pool()``。
         self._download_pool = None
+        self._cache_last_check = 0.0  # 附件缓存清理节流（实例属性，按实例隔离）
+        self._cache_last_check = 0.0  # 附件缓存清理节流（实例属性，按实例隔离）
 
     def _get_download_pool(self):
         """取（或惰性创建）附件下载专用线程池。"""
@@ -150,6 +152,7 @@ class QQOfficialParser(BasicParser):
             except Exception:
                 pass
             self._download_pool = None
+        self._cache_last_check = 0.0  # 附件缓存清理节流（实例属性，按实例隔离）
 
     def _warned_sets(self) -> tuple:
         """返回本实例的两个提示去重集合（惰性创建，兼容绕过 __init__ 的构造）。"""
@@ -702,9 +705,8 @@ class QQOfficialParser(BasicParser):
 
         return segments
 
-    # 附件缓存上限（默认 512MB；0 = 不缓存，-1 = 不清理）
-    _CACHE_MAX_BYTES = 512 * 1024 * 1024
-    _CACHE_CLEAN_STATE = {"last_check": 0.0}
+    _cache_last_check = 0.0
+    _CACHE_MAX_BYTES = 512 * 1024 * 1024  # 附件缓存上限（默认 512MB；0 = 不缓存，-1 = 不清理）
 
     def _cache_attachment(self, url: str, filename: str, content_type: str) -> Optional[str]:
         """下载附件到插件数据目录，返回本地绝对路径（失败返回 None）。
@@ -727,8 +729,8 @@ class QQOfficialParser(BasicParser):
 
             # 大小检查节流（10 分钟一次）
             now = time.time()
-            if now - self._CACHE_CLEAN_STATE["last_check"] > 600:
-                self._CACHE_CLEAN_STATE["last_check"] = now
+            if now - self._cache_last_check > 600:
+                self._cache_last_check = now
                 self._cleanup_attachment_cache(data_dir)
 
             digest = hashlib.md5(url.encode()).hexdigest()[:12]
