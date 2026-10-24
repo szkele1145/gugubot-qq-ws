@@ -130,7 +130,6 @@ class QQOfficialParser(BasicParser):
         # （图片段只剩 url）。建池推迟到 ``_get_download_pool()``。
         self._download_pool = None
         self._cache_last_check = 0.0  # 附件缓存清理节流（实例属性，按实例隔离）
-        self._cache_last_check = 0.0  # 附件缓存清理节流（实例属性，按实例隔离）
 
     def _get_download_pool(self):
         """取（或惰性创建）附件下载专用线程池。"""
