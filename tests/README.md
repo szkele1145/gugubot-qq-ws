@@ -117,3 +117,5 @@ python tests\test_lang_orphans.py       # 语言包孤儿键 / 单边漏译反�
 > ⚠️ **两类测试文件必须分清**：有模块级 `def test_*` 的被 pytest 直接收集；写成「顶层脚本 + `print("PASS")`」的**永远不会被 `pytest tests/` 执行**——历史上 `test_rate_limit.py` 就是这样长期「假通过」的（详见上表）。现在所有独立脚本已登记进 `test_standalone_scripts.py`，新增时请同步登记。
 
 > **路径约定**：`tests/` 下的脚本用 `sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / 'plugin'))` 引入插件源码（基于 `__file__` 推导）。此前 25 个文件硬编码了 `F:\vibe coding工程\gugubot-qq-ws\plugin`，换机器/换目录会全部 ImportError，已全部改掉。
+
+| test_ws_backoff_no_storm.py | WS 重连退避：连不上时不重置退避（指数 3→6→12→24→48→60），连上过后仍可重置 |
