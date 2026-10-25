@@ -319,7 +319,7 @@ async def on_user_info(server: PluginServerInterface, info: Info) -> None:
 
 
 # 卸载
-async def on_unload(_: PluginServerInterface) -> None:
+async def on_unload(server: PluginServerInterface) -> None:
     global api
     cancel_all_pending_notices()
     if api is not None:
@@ -328,16 +328,37 @@ async def on_unload(_: PluginServerInterface) -> None:
     try:
         # 停止未绑定检查定时任务
         if unbound_check_system:
-            unbound_check_system.stop_schedule_task()
+            try:
+                unbound_check_system.stop_schedule_task()
+            except Exception as e:
+                try:
+                    server.logger.debug(f"[GUGUBot] 停止未绑定检查定时任务失败: {e}")
+                except Exception:
+                    pass
 
         # 停止不活跃检查定时任务
         if inactive_check_system:
-            inactive_check_system.stop_schedule_task()
+            try:
+                inactive_check_system.stop_schedule_task()
+            except Exception as e:
+                try:
+                    server.logger.debug(f"[GUGUBot] 停止不活跃检查定时任务失败: {e}")
+                except Exception:
+                    pass
 
         if connector_manager:
-            await connector_manager.disconnect_all()
-    except:
-        pass
+            try:
+                await connector_manager.disconnect_all()
+            except Exception as e:
+                try:
+                    server.logger.debug(f"[GUGUBot] 断开所有连接器失败: {e}")
+                except Exception:
+                    pass
+    except Exception as e:
+        try:
+            server.logger.debug(f"[GUGUBot] on_unload 清理异常: {e}")
+        except Exception:
+            pass
 
 
 # +---------------------------------------------------------------------+
