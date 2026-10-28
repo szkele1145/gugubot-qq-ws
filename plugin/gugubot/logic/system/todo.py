@@ -36,7 +36,16 @@ class TodoSystem(BasicConfig, BasicSystem):
 
         # 初始化next_id
         if "next_id" in self:
-            self._next_id = int(self.get("next_id", 1))
+            # next_id 来自用户编辑的 todos.yml：可能填成字符串或非数字，
+            # 此处无保护会抛 ValueError → 整个待办系统 initialize() 失败。
+            # 与下方 max_id 同法：失败回退到 1。
+            try:
+                self._next_id = int(self.get("next_id", 1))
+            except (ValueError, TypeError):
+                self.logger.warning(
+                    "next_id 非法（%r），回退到 1", self.get("next_id")
+                )
+                self._next_id = 1
         else:
             # 如果已有待办项，找到最大ID
             todos = self.get("todos", {})
