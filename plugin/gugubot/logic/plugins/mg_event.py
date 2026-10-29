@@ -10,11 +10,15 @@ from mcdreforged.api.types import PluginServerInterface
 from gugubot.builder import MessageBuilder
 from gugubot.config import BotConfig
 from gugubot.connector import ConnectorManager
+from gugubot.utils.num import as_id_list
 from gugubot.utils.types import ProcessedInfo
 
 
 def _build_notice_target(group_ids: List) -> Optional[Dict[str, str]]:
-    groups = [g for g in (group_ids or []) if g]
+    # as_id_list：标量配置（`notice_forward_groups: 123456`）不能被逐字符
+    # 遍历 —— 否则会造出 {"1": "group", "2": "group", ...} 这种假目标，
+    # 成就/死亡播报发到不存在的群，日志里一堆发送失败却看不出是配置写错。
+    groups = as_id_list(group_ids)
     if not groups:
         return None
     target = {str(g): "group" for g in groups}
